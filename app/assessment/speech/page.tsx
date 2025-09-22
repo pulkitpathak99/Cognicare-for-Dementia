@@ -1,547 +1,384 @@
 // In: app/assessment/speech/page.tsx
 "use client";
 
+import React, { useEffect, useReducer, useRef } from "react";
+import Link from "next/link";
 import {
   ArrowLeft,
   AudioLines,
   CheckCircle,
-  Clock,
-  FileAudio,
+  ChevronRight,
+  Loader2,
   Mic,
-  Pause,
-  Play,
+  RefreshCcw,
   Square,
   Volume2,
 } from "lucide-react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import React, { useEffect, useReducer, useRef } from "react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
-import { Textarea } from "@/components/ui/textarea";
 import { speechAnalyzer, type SpeechAnalysisResult } from "@/lib/speech-analysis";
 import { storage, type AssessmentResult } from "@/lib/storage";
+import { cn } from "@/lib/utils"; // Assuming you have this utility
 
-// Helper to format time from seconds
-const formatTime = (seconds: number) => {
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
-};
+// ============================================================================
+// RE-DEFINED & SIMPLIFIED UI COMPONENTS (for consistency and reliability)
+// ============================================================================
 
-// --- STATE MANAGEMENT ---
+const Button = React.forwardRef<
+  HTMLButtonElement,
+  React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "default" | "destructive" | "outline" }
+>(({ className, variant = "default", ...props }, ref) => {
+  const variants = {
+    default: "bg-primary text-primary-foreground hover:bg-primary/90",
+    destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
+    outline: "border border-input bg-background hover:bg-accent hover:text-accent-foreground",
+  };
+  return (
+    <button
+      className={cn(
+        "inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none h-10 py-2 px-4 gap-2",
+        variants[variant],
+        className
+      )}
+      ref={ref}
+      {...props}
+    />
+  );
+});
+Button.displayName = "Button";
+
+const Card = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+  ({ className, ...props }, ref) => (
+    <div
+      ref={ref}
+      className={cn("rounded-xl border bg-card text-card-foreground shadow", className)}
+      {...props}
+    />
+  )
+);
+Card.displayName = "Card";
+
+const CardHeader = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+  ({ className, ...props }, ref) => (
+    <div ref={ref} className={cn("flex flex-col space-y-1.5 p-6", className)} {...props} />
+  )
+);
+CardHeader.displayName = "CardHeader";
+
+const CardTitle = React.forwardRef<HTMLParagraphElement, React.HTMLAttributes<HTMLHeadingElement>>(
+  ({ className, ...props }, ref) => (
+    <h3 ref={ref} className={cn("font-semibold leading-none tracking-tight", className)} {...props} />
+  )
+);
+CardTitle.displayName = "CardTitle";
+
+const CardDescription = React.forwardRef<
+  HTMLParagraphElement,
+  React.HTMLAttributes<HTMLParagraphElement>
+>(({ className, ...props }, ref) => (
+  <p ref={ref} className={cn("text-sm text-muted-foreground", className)} {...props} />
+));
+CardDescription.displayName = "CardDescription";
+
+const CardContent = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+  ({ className, ...props }, ref) => (
+    <div ref={ref} className={cn("p-6 pt-0", className)} {...props} />
+  )
+);
+CardContent.displayName = "CardContent";
+
+// ============================================================================
+// STATE MANAGEMENT & TYPES
+// ============================================================================
+
+type Status = "idle" | "ready" | "recording" | "reviewing" | "analyzing" | "complete";
 type State = {
-  status: "idle" | "recording" | "paused" | "analyzing" | "complete";
-  recordingTime: number;
+  status: Status;
   audioBlob: Blob | null;
   audioUrl: string | null;
   transcript: string;
-  interimTranscript: string;
   analysisResult: SpeechAnalysisResult | null;
-  currentPromptIndex: number;
-  prompts: string[];
-  isBrowserSupported: boolean;
-  voiceAssist: boolean;
-  startTime: number;
+  error: string | null;
+  prompt: string;
 };
 
 type Action =
+  | { type: "INITIALIZE" }
   | { type: "START_RECORDING" }
-  | { type: "PAUSE_RECORDING" }
-  | { type: "RESUME_RECORDING" }
-  | { type: "STOP_RECORDING"; blob: Blob; url: string }
-  | { type: "START_ANALYSIS" }
-  | { type: "ANALYSIS_COMPLETE"; result: SpeechAnalysisResult }
-  | { type: "TICK" }
-  | { type: "SET_TRANSCRIPT"; payload: string }
-  | { type: "SET_INTERIM_TRANSCRIPT"; payload: string }
-  | { type: "RESET_TEST" }
-  | { type: "TOGGLE_VOICE_ASSIST" }
-  | { type: "SET_PROMPTS"; payload: string[] }
-  | { type: "SET_UNSUPPORTED" };
+  | { type: "STOP_RECORDING"; payload: { blob: Blob; url: string; transcript: string } }
+  | { type: "CONFIRM_RECORDING" }
+  | { type: "RETAKE" }
+  | { type: "ANALYSIS_COMPLETE"; payload: SpeechAnalysisResult }
+  | { type: "ERROR"; payload: string };
 
 const initialState: State = {
   status: "idle",
-  recordingTime: 0,
   audioBlob: null,
   audioUrl: null,
   transcript: "",
-  interimTranscript: "",
   analysisResult: null,
-  currentPromptIndex: 0,
-  prompts: [],
-  isBrowserSupported: true,
-  voiceAssist: false,
-  startTime: 0,
+  error: null,
+  prompt: speechAnalyzer.generateSpeechPrompts()[0], // Start with the first prompt
 };
 
-const reducer = (state: State, action: Action): State => {
+function speechReducer(state: State, action: Action): State {
   switch (action.type) {
-    case "SET_PROMPTS":
-      return { ...state, prompts: action.payload };
+    case "INITIALIZE":
+      return { ...state, status: "ready" };
     case "START_RECORDING":
-      return {
-        ...state,
-        status: "recording",
-        recordingTime: 0,
-        transcript: "",
-        interimTranscript: "",
-        audioBlob: null,
-        audioUrl: null,
-        startTime: Date.now(),
-      };
-    case "PAUSE_RECORDING":
-      return { ...state, status: "paused" };
-    case "RESUME_RECORDING":
-      return { ...state, status: "recording" };
+      return { ...state, status: "recording", audioBlob: null, audioUrl: null, transcript: "" };
     case "STOP_RECORDING":
-      return { ...state, status: "analyzing", audioBlob: action.blob, audioUrl: action.url };
+      return { ...state, status: "reviewing", ...action.payload };
+    case "CONFIRM_RECORDING":
+      return { ...state, status: "analyzing" };
+    case "RETAKE":
+      return { ...state, status: "ready", audioBlob: null, audioUrl: null, transcript: "" };
     case "ANALYSIS_COMPLETE":
-      return { ...state, status: "complete", analysisResult: action.result };
-    case "TICK":
-      return { ...state, recordingTime: state.recordingTime + 1 };
-    case "SET_TRANSCRIPT":
-      return { ...state, transcript: state.transcript + action.payload };
-    case "SET_INTERIM_TRANSCRIPT":
-      return { ...state, interimTranscript: action.payload };
-    case "RESET_TEST":
-      return {
-        ...initialState,
-        prompts: state.prompts,
-        voiceAssist: state.voiceAssist,
-        isBrowserSupported: state.isBrowserSupported,
-      };
-    case "TOGGLE_VOICE_ASSIST":
-      return { ...state, voiceAssist: !state.voiceAssist };
-    case "SET_UNSUPPORTED":
-      return { ...state, isBrowserSupported: false };
+      return { ...state, status: "complete", analysisResult: action.payload };
+    case "ERROR":
+      return { ...state, status: "idle", error: action.payload };
     default:
       return state;
   }
-};
+}
 
-// --- Custom Hook for Audio & Speech Recognition ---
-const useSpeechRecognition = (dispatch: React.Dispatch<Action>) => {
+// ============================================================================
+// CUSTOM HOOK: useSpeechRecorder
+// ============================================================================
+
+function useSpeechRecorder(onStop: Action["payload"] => void, onError: (msg: string) => void) {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const recognitionRef = useRef<any>(null);
+  const recognitionRef = useRef<any | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const transcriptRef = useRef("");
 
   const start = async () => {
+    transcriptRef.current = "";
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
-      mediaRecorderRef.current = mediaRecorder;
+      mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: "audio/webm" });
       audioChunksRef.current = [];
 
-      mediaRecorder.ondataavailable = (event) => audioChunksRef.current.push(event.data);
-      mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
-        const audioUrl = URL.createObjectURL(audioBlob);
-        dispatch({ type: "STOP_RECORDING", blob: audioBlob, url: audioUrl });
+      mediaRecorderRef.current.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
+
+      mediaRecorderRef.current.onstop = () => {
+        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        const url = URL.createObjectURL(blob);
+        onStop({ blob, url, transcript: transcriptRef.current });
         stream.getTracks().forEach((track) => track.stop());
       };
-      mediaRecorder.start();
-      dispatch({ type: "START_RECORDING" });
 
-      // Speech Recognition
+      // --- Speech Recognition ---
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SpeechRecognition) {
-        dispatch({ type: "SET_UNSUPPORTED" });
-        return;
+      if (SpeechRecognition) {
+        recognitionRef.current = new SpeechRecognition();
+        recognitionRef.current.continuous = true;
+        recognitionRef.current.interimResults = false;
+        recognitionRef.current.onresult = (event: any) => {
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            if (event.results[i].isFinal) {
+              transcriptRef.current += event.results[i][0].transcript + " ";
+            }
+          }
+        };
+        recognitionRef.current.start();
       }
-      const recognition = new SpeechRecognition();
-      recognitionRef.current = recognition;
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = "en-US";
-
-      recognition.onresult = (event: any) => {
-        let interim = "";
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcriptPart = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            dispatch({ type: "SET_TRANSCRIPT", payload: transcriptPart + " " });
-          } else {
-            interim += transcriptPart;
-          }
-        }
-        dispatch({ type: "SET_INTERIM_TRANSCRIPT", payload: interim });
-      };
-
-      recognition.onend = () => {
-        if (mediaRecorderRef.current?.state === "recording") {
-          try {
-            recognition.start();
-          } catch (e) {
-            console.error("Error restarting recognition:", e);
-          }
-        }
-      };
-      recognition.start();
-    } catch (error) {
-      console.error("Microphone access denied:", error);
-      alert("Microphone access is required for this test.");
+      mediaRecorderRef.current.start();
+    } catch (err) {
+      onError("Microphone access was denied. Please enable it in your browser settings.");
     }
   };
 
   const stop = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-      mediaRecorderRef.current.stop();
-    }
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-    }
+    mediaRecorderRef.current?.stop();
+    recognitionRef.current?.stop();
   };
 
-  const pause = () => {
-    if (mediaRecorderRef.current?.state === "recording") {
-      mediaRecorderRef.current.pause();
-      recognitionRef.current?.stop();
-      dispatch({ type: "PAUSE_RECORDING" });
-    }
-  };
+  return { start, stop };
+}
 
-  const resume = () => {
-    if (mediaRecorderRef.current?.state === "paused") {
-      mediaRecorderRef.current.resume();
-      recognitionRef.current?.start();
-      dispatch({ type: "RESUME_RECORDING" });
-    }
-  };
+// ============================================================================
+// MAIN COMPONENT: SpeechAssessmentPage
+// ============================================================================
 
-  return { start, stop, pause, resume };
-};
-
-// --- UI Sub-components ---
-const TestHeader = ({
-  status,
-  recordingTime,
-  voiceAssist,
-  onToggleVoice,
-}: {
-  status: State["status"];
-  recordingTime: number;
-  voiceAssist: boolean;
-  onToggleVoice: () => void;
-}) => (
-  <header className="mb-8">
-    <Link
-      href="/dashboard"
-      className="inline-flex items-center text-muted-foreground hover:text-foreground mb-4"
-    >
-      <ArrowLeft className="w-4 h-4 mr-2" />
-      Back to Dashboard
-    </Link>
-    <div className="flex items-start justify-between">
-      <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <AudioLines className="w-6 h-6 text-primary" />
-          Speech Assessment
-        </h1>
-        <p className="text-muted-foreground">
-          Analyze your speech patterns and language skills.
-        </p>
-      </div>
-      <Button variant="outline" size="sm" onClick={onToggleVoice}>
-        <Volume2 className="w-4 h-4 mr-2" />
-        {voiceAssist ? "Voice On" : "Voice Off"}
-      </Button>
-    </div>
-    <div className="flex items-center gap-4 mt-4">
-      <Badge>Speech Recording</Badge>
-      {(status === "recording" || status === "paused") && (
-        <div className="flex items-center gap-2 ml-auto">
-          <Clock className="w-4 h-4 text-muted-foreground" />
-          <span className="text-sm font-mono text-muted-foreground">
-            {formatTime(recordingTime)}
-          </span>
-        </div>
-      )}
-    </div>
-  </header>
-);
-
-const RecordingControls = ({
-  status,
-  onStart,
-  onPause,
-  onResume,
-  onStop,
-}: {
-  status: State["status"];
-  onStart: () => void;
-  onPause: () => void;
-  onResume: () => void;
-  onStop: () => void;
-}) => (
-  <div className="flex justify-center gap-4 py-4">
-    {status === "idle" && (
-      <Button onClick={onStart} size="lg">
-        <Mic className="w-5 h-5 mr-2" />
-        Start Recording
-      </Button>
-    )}
-    {status === "recording" && (
-      <>
-        <Button onClick={onPause} variant="outline" size="lg">
-          <Pause className="w-5 h-5 mr-2" />
-          Pause
-        </Button>
-        <Button onClick={onStop} variant="destructive" size="lg">
-          <Square className="w-5 h-5 mr-2" />
-          Stop & Analyze
-        </Button>
-      </>
-    )}
-    {status === "paused" && (
-      <>
-        <Button onClick={onResume} variant="outline" size="lg">
-          <Play className="w-5 h-5 mr-2" />
-          Resume
-        </Button>
-        <Button onClick={onStop} variant="destructive" size="lg">
-          <Square className="w-5 h-5 mr-2" />
-          Stop & Analyze
-        </Button>
-      </>
-    )}
-  </div>
-);
-
-const TranscriptDisplay = ({
-  transcript,
-  interimTranscript,
-  isSupported,
-  onTranscriptChange,
-}: {
-  transcript: string;
-  interimTranscript: string;
-  isSupported: boolean;
-  onTranscriptChange: (value: string) => void;
-}) => (
-  <Card>
-    <CardHeader>
-      <CardTitle>Live Transcript</CardTitle>
-      <CardDescription>
-        {isSupported
-          ? "Your speech is being transcribed in real-time."
-          : "Transcription is not supported. Please type your response."}
-      </CardDescription>
-    </CardHeader>
-    <CardContent>
-      <Textarea
-        value={`${transcript}${interimTranscript}`}
-        onChange={(e) => onTranscriptChange(e.target.value)}
-        placeholder="Your transcribed speech will appear here..."
-        className="min-h-[200px] text-base"
-        readOnly={isSupported}
-      />
-    </CardContent>
-  </Card>
-);
-
-const ResultsDisplay = ({
-  result,
-  onReset,
-}: {
-  result: SpeechAnalysisResult;
-  onReset: () => void;
-}) => {
-  const overallScore = Math.round(
-    Object.values(result.metrics).reduce((a, b) => a + b, 0) / 5
-  );
-
-  return (
-    <div className="container mx-auto max-w-3xl py-8">
-      <Card className="text-center">
-        <CardHeader>
-          <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <CheckCircle className="w-8 h-8 text-green-600" />
-          </div>
-          <CardTitle className="text-2xl">Assessment Complete!</CardTitle>
-          <CardDescription>Your speech patterns have been analyzed.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="bg-primary/10 p-6 rounded-lg">
-            <h3 className="text-lg font-semibold mb-2">Overall Speech Score</h3>
-            <div className="text-4xl font-bold text-primary mb-2">{overallScore}</div>
-            <Progress value={overallScore} className="h-3" />
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-center">
-            {Object.entries(result.metrics).map(([key, value]) => (
-              <div key={key} className="bg-muted/50 p-4 rounded-lg">
-                <div className="text-2xl font-bold">{value}</div>
-                <div className="text-sm text-muted-foreground capitalize">
-                  {key.replace(/([A-Z])/g, " $1").trim()}
-                </div>
-              </div>
-            ))}
-            <div className="bg-muted/50 p-4 rounded-lg">
-              <div className="text-2xl font-bold">{Math.round(result.speakingRate)}</div>
-              <div className="text-sm text-muted-foreground">Words/Min</div>
-            </div>
-          </div>
-          <div className="flex justify-center gap-4">
-            <Button onClick={onReset} variant="outline">
-              Take Another Test
-            </Button>
-            <Button asChild>
-              <Link href="/dashboard">Return to Dashboard</Link>
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
-};
-
-// --- Main Page Component ---
 export default function SpeechAssessmentPage() {
-  const [state, dispatch] = useReducer(reducer, initialState);
-  const router = useRouter();
-  const { start, stop, pause, resume } = useSpeechRecognition(dispatch);
-  const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [state, dispatch] = useReducer(speechReducer, initialState);
+  const startTimeRef = useRef<number>(0);
 
-  // Text-to-speech utility
-  const speak = (text: string) => {
-    if (state.voiceAssist && "speechSynthesis" in window) {
-      speechSynthesis.speak(new SpeechSynthesisUtterance(text));
-    }
+  const handleStop = (payload: Action["payload"]) => {
+    const duration = Date.now() - startTimeRef.current;
+    dispatch({ type: "STOP_RECORDING", payload: { ...payload, duration } });
   };
+  
+  const handleError = (message: string) => dispatch({ type: "ERROR", payload: message });
 
-  // Effect to load prompts on mount
+  const { start, stop } = useSpeechRecorder(handleStop, handleError);
+
   useEffect(() => {
-    dispatch({ type: "SET_PROMPTS", payload: speechAnalyzer.generateSpeechPrompts() });
+    // On mount, ask for permissions to move to 'ready' state.
+    navigator.mediaDevices
+      .getUserMedia({ audio: true })
+      .then((stream) => {
+        dispatch({ type: "INITIALIZE" });
+        stream.getTracks().forEach((track) => track.stop()); // We don't need the stream yet
+      })
+      .catch(() =>
+        handleError("Microphone access is required. Please grant permission to start.")
+      );
   }, []);
 
-  // Effect to manage recording timer
-  useEffect(() => {
-    if (state.status === "recording") {
-      recordingIntervalRef.current = setInterval(() => dispatch({ type: "TICK" }), 1000);
-    } else {
-      if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
-    }
-    return () => {
-      if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
-    };
-  }, [state.status]);
-
-  // Effect to handle analysis and save results
   useEffect(() => {
     if (state.status === "analyzing" && state.audioBlob) {
-      const analyze = async () => {
-        const result = speechAnalyzer.analyzeTranscript(
-          state.transcript,
-          state.recordingTime
-        );
-        dispatch({ type: "ANALYSIS_COMPLETE", result });
-
-        const userId = localStorage.getItem("currentUserId");
-        if (userId) {
-          const score = Math.round(
-            Object.values(result.metrics).reduce((a, b) => a + b, 0) / 5
-          );
-          const assessment: AssessmentResult = {
-            id: `speech_${Date.now()}`,
-            userId,
-            type: "speech",
-            score,
-            maxScore: 100,
-            duration: Date.now() - state.startTime,
-            details: { ...result, prompt: state.prompts[state.currentPromptIndex] },
-            completedAt: new Date().toISOString(),
-          };
-          storage.saveAssessmentResult(assessment);
-        }
-      };
-      analyze();
+      // Simulate analysis delay
+      setTimeout(() => {
+        const durationInSeconds = (Date.now() - startTimeRef.current) / 1000;
+        const result = speechAnalyzer.analyzeTranscript(state.transcript, durationInSeconds);
+        dispatch({ type: "ANALYSIS_COMPLETE", payload: result });
+        
+        // Save to storage
+        const userId = localStorage.getItem("currentUserId") || 'guest';
+        const score = Math.round(Object.values(result.metrics).reduce((a, b) => a + b, 0) / 5);
+        const assessment: AssessmentResult = {
+          id: `speech_${Date.now()}`,
+          userId,
+          type: "speech",
+          score,
+          maxScore: 100,
+          duration: Math.round(durationInSeconds * 1000),
+          details: { ...result, prompt: state.prompt },
+          completedAt: new Date().toISOString(),
+        };
+        storage.saveAssessmentResult(assessment);
+      }, 1500);
     }
-  }, [
-    state.status,
-    state.audioBlob,
-    state.transcript,
-    state.recordingTime,
-    state.startTime,
-    state.prompts,
-    state.currentPromptIndex,
-  ]);
+  }, [state.status, state.audioBlob, state.transcript, state.prompt]);
 
-  const handleToggleVoice = () => {
-    dispatch({ type: "TOGGLE_VOICE_ASSIST" });
-    speak(state.voiceAssist ? "Voice assistance disabled." : "Voice assistance enabled.");
+  const handleStartRecording = () => {
+    startTimeRef.current = Date.now();
+    start();
+    dispatch({ type: "START_RECORDING" });
   };
+  
+  // --- RENDER LOGIC ---
 
-  if (state.status === "complete" && state.analysisResult) {
+  if (state.status === 'complete' && state.analysisResult) {
+    const result = state.analysisResult;
+    const overallScore = Math.round(Object.values(result.metrics).reduce((a, b) => a + b, 0) / 5);
     return (
-      <ResultsDisplay
-        result={state.analysisResult}
-        onReset={() => dispatch({ type: "RESET_TEST" })}
-      />
+      <div className="container mx-auto max-w-2xl py-12">
+        <Card>
+          <CardHeader className="text-center">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-green-100">
+                  <CheckCircle className="h-6 w-6 text-green-600" />
+              </div>
+              <CardTitle className="text-2xl mt-4">Assessment Complete</CardTitle>
+              <CardDescription>Here is the summary of your speech analysis.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+              <div className="rounded-lg bg-primary/10 p-4">
+                  <div className="flex justify-between items-center mb-1">
+                      <h4 className="font-semibold">Overall Speech Score</h4>
+                      <p className="text-2xl font-bold text-primary">{overallScore}</p>
+                  </div>
+                  <div className="w-full bg-primary/20 rounded-full h-2.5">
+                      <div className="bg-primary h-2.5 rounded-full" style={{ width: `${overallScore}%` }}></div>
+                  </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-center">
+                  {Object.entries(result.metrics).map(([key, value]) => (
+                      <div key={key} className="rounded-lg bg-muted/50 p-3">
+                          <p className="text-2xl font-bold">{value}</p>
+                          <p className="text-xs text-muted-foreground capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}</p>
+                      </div>
+                  ))}
+              </div>
+              <div className="flex gap-4">
+                  <Button variant="outline" className="w-full" onClick={() => dispatch({ type: 'RETAKE' })}>
+                      <RefreshCcw className="mr-2 h-4 w-4" />
+                      Take Again
+                  </Button>
+                  <Button className="w-full" asChild>
+                      <Link href="/dashboard">
+                          Go to Dashboard
+                          <ChevronRight className="ml-2 h-4 w-4" />
+                      </Link>
+                  </Button>
+              </div>
+          </CardContent>
+        </Card>
+      </div>
     );
   }
 
   return (
-    <div className="container mx-auto max-w-4xl py-8 px-4">
-      <TestHeader
-        status={state.status}
-        recordingTime={state.recordingTime}
-        voiceAssist={state.voiceAssist}
-        onToggleVoice={handleToggleVoice}
-      />
-
-      <main className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2">
-          <Card>
-            <CardHeader>
-              <CardTitle>
-                Prompt {state.currentPromptIndex + 1} of {state.prompts.length}
+    <div className="container mx-auto max-w-3xl py-12">
+      <div className="mb-4">
+        <Link href="/dashboard" className="text-sm inline-flex items-center text-muted-foreground hover:text-foreground">
+          <ArrowLeft className="w-4 h-4 mr-2" />
+          Back to Dashboard
+        </Link>
+      </div>
+      <Card>
+        <CardHeader>
+          <div className="flex justify-between items-start">
+            <div>
+              <CardTitle className="text-xl flex items-center gap-2">
+                <AudioLines className="w-6 h-6 text-primary" />
+                Speech Assessment
               </CardTitle>
-              <CardDescription className="text-lg pt-2">
-                {state.prompts[state.currentPromptIndex] || "Loading prompt..."}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <RecordingControls
-                status={state.status}
-                onStart={start}
-                onPause={pause}
-                onResume={resume}
-                onStop={stop}
-              />
-              {state.status === "analyzing" && (
-                <div className="text-center text-muted-foreground">Analyzing...</div>
-              )}
-              {state.audioUrl && state.status !== "recording" && (
-                <div className="mt-4 bg-muted/50 p-4 rounded-lg">
-                  <div className="flex items-center gap-3 mb-2">
-                    <FileAudio className="w-5 h-5 text-primary" />
-                    <span className="font-medium">Your Recording</span>
-                  </div>
-                  <audio controls src={state.audioUrl} className="w-full" />
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-        <div>
-          <TranscriptDisplay
-            transcript={state.transcript}
-            interimTranscript={state.interimTranscript}
-            isSupported={state.isBrowserSupported}
-            onTranscriptChange={(value) =>
-              dispatch({ type: "SET_TRANSCRIPT", payload: value })
-            }
-          />
-        </div>
-      </main>
+              <CardDescription>Please respond clearly to the prompt below.</CardDescription>
+            </div>
+            {state.status === "recording" && (
+              <div className="flex items-center gap-2 rounded-full bg-destructive/10 px-3 py-1 text-sm text-destructive">
+                <div className="h-2 w-2 rounded-full bg-destructive animate-pulse"></div>
+                Recording
+              </div>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="rounded-lg border bg-accent/50 p-6 text-center">
+            <h3 className="text-lg leading-relaxed">{state.prompt}</h3>
+          </div>
+
+          {state.error && <p className="text-sm text-center text-destructive">{state.error}</p>}
+          
+          {state.status === "ready" && (
+            <Button className="w-full" onClick={handleStartRecording}>
+              <Mic className="mr-2 h-4 w-4" /> Start Recording
+            </Button>
+          )}
+
+          {state.status === "recording" && (
+            <Button className="w-full" variant="destructive" onClick={stop}>
+              <Square className="mr-2 h-4 w-4" /> Stop Recording
+            </Button>
+          )}
+
+          {state.status === "reviewing" && (
+            <div className="space-y-4">
+              <h4 className="text-center font-semibold">Review Your Recording</h4>
+              <audio src={state.audioUrl!} controls className="w-full" />
+              <div className="flex gap-4">
+                <Button variant="outline" className="w-full" onClick={() => dispatch({ type: "RETAKE" })}>
+                  <RefreshCcw className="mr-2 h-4 w-4" />
+                  Retake
+                </Button>
+                <Button className="w-full" onClick={() => dispatch({ type: "CONFIRM_RECORDING" })}>
+                  Confirm & Analyze <ChevronRight className="ml-2 h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {state.status === "analyzing" && (
+            <div className="flex flex-col items-center justify-center gap-4 py-8 text-muted-foreground">
+              <Loader2 className="h-8 w-8 animate-spin" />
+              <p>Analyzing your speech patterns...</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
