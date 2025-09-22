@@ -1,597 +1,547 @@
-"use client"
+// In: app/assessment/speech/page.tsx
+"use client";
 
-import { useState, useEffect, useRef } from "react"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Progress } from "@/components/ui/progress"
-import { Badge } from "@/components/ui/badge"
-import { Textarea } from "@/components/ui/textarea"
 import {
-  Mic,
-  Play,
-  Pause,
-  Square,
-  Clock,
   ArrowLeft,
+  AudioLines,
   CheckCircle,
-  Volume2,
-  AudioWaveform as Waveform,
+  Clock,
   FileAudio,
-} from "lucide-react"
-import { storage, type AssessmentResult } from "@/lib/storage"
-import { speechAnalyzer, type SpeechAnalysisResult } from "@/lib/speech-analysis"
-import { useRouter } from "next/navigation"
-import Link from "next/link"
+  Mic,
+  Pause,
+  Play,
+  Square,
+  Volume2,
+} from "lucide-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import React, { useEffect, useReducer, useRef } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
+import { Textarea } from "@/components/ui/textarea";
+import { speechAnalyzer, type SpeechAnalysisResult } from "@/lib/speech-analysis";
+import { storage, type AssessmentResult } from "@/lib/storage";
 
-export default function SpeechAssessmentPage() {
-  const router = useRouter()
-  const [startTime, setStartTime] = useState<number>(Date.now())
-  const [voiceEnabled, setVoiceEnabled] = useState(false)
+// Helper to format time from seconds
+const formatTime = (seconds: number) => {
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
+};
 
-  // Recording state
-  const [isRecording, setIsRecording] = useState(false)
-  const [isPaused, setIsPaused] = useState(false)
-  const [recordingTime, setRecordingTime] = useState(0)
-  const [audioBlob, setAudioBlob] = useState<Blob | null>(null)
-  const [audioUrl, setAudioUrl] = useState<string | null>(null)
+// --- STATE MANAGEMENT ---
+type State = {
+  status: "idle" | "recording" | "paused" | "analyzing" | "complete";
+  recordingTime: number;
+  audioBlob: Blob | null;
+  audioUrl: string | null;
+  transcript: string;
+  interimTranscript: string;
+  analysisResult: SpeechAnalysisResult | null;
+  currentPromptIndex: number;
+  prompts: string[];
+  isBrowserSupported: boolean;
+  voiceAssist: boolean;
+  startTime: number;
+};
 
-  // Analysis state
-  const [currentPrompt, setCurrentPrompt] = useState(0)
-  const [prompts, setPrompts] = useState<string[]>([])
-  const [transcript, setTranscript] = useState("")
-  const [interimTranscript, setInterimTranscript] = useState("") // Added interim transcript state
-  const [isAnalyzing, setIsAnalyzing] = useState(false)
-  const [analysisResult, setAnalysisResult] = useState<SpeechAnalysisResult | null>(null)
-  const [testComplete, setTestComplete] = useState(false)
-  const [speechSupported, setSpeechSupported] = useState(true) // Added speech support detection
+type Action =
+  | { type: "START_RECORDING" }
+  | { type: "PAUSE_RECORDING" }
+  | { type: "RESUME_RECORDING" }
+  | { type: "STOP_RECORDING"; blob: Blob; url: string }
+  | { type: "START_ANALYSIS" }
+  | { type: "ANALYSIS_COMPLETE"; result: SpeechAnalysisResult }
+  | { type: "TICK" }
+  | { type: "SET_TRANSCRIPT"; payload: string }
+  | { type: "SET_INTERIM_TRANSCRIPT"; payload: string }
+  | { type: "RESET_TEST" }
+  | { type: "TOGGLE_VOICE_ASSIST" }
+  | { type: "SET_PROMPTS"; payload: string[] }
+  | { type: "SET_UNSUPPORTED" };
 
-  // Recording refs
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const audioChunksRef = useRef<Blob[]>([])
-  const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null)
-  const recognitionRef = useRef<any>(null)
-  const pauseTimesRef = useRef<number[]>([])
-  const lastSpeechTimeRef = useRef<number>(0)
+const initialState: State = {
+  status: "idle",
+  recordingTime: 0,
+  audioBlob: null,
+  audioUrl: null,
+  transcript: "",
+  interimTranscript: "",
+  analysisResult: null,
+  currentPromptIndex: 0,
+  prompts: [],
+  isBrowserSupported: true,
+  voiceAssist: false,
+  startTime: 0,
+};
 
-  const speak = (text: string) => {
-    if (voiceEnabled && "speechSynthesis" in window) {
-      const utterance = new SpeechSynthesisUtterance(text)
-      utterance.rate = 0.8
-      speechSynthesis.speak(utterance)
-    }
+const reducer = (state: State, action: Action): State => {
+  switch (action.type) {
+    case "SET_PROMPTS":
+      return { ...state, prompts: action.payload };
+    case "START_RECORDING":
+      return {
+        ...state,
+        status: "recording",
+        recordingTime: 0,
+        transcript: "",
+        interimTranscript: "",
+        audioBlob: null,
+        audioUrl: null,
+        startTime: Date.now(),
+      };
+    case "PAUSE_RECORDING":
+      return { ...state, status: "paused" };
+    case "RESUME_RECORDING":
+      return { ...state, status: "recording" };
+    case "STOP_RECORDING":
+      return { ...state, status: "analyzing", audioBlob: action.blob, audioUrl: action.url };
+    case "ANALYSIS_COMPLETE":
+      return { ...state, status: "complete", analysisResult: action.result };
+    case "TICK":
+      return { ...state, recordingTime: state.recordingTime + 1 };
+    case "SET_TRANSCRIPT":
+      return { ...state, transcript: state.transcript + action.payload };
+    case "SET_INTERIM_TRANSCRIPT":
+      return { ...state, interimTranscript: action.payload };
+    case "RESET_TEST":
+      return {
+        ...initialState,
+        prompts: state.prompts,
+        voiceAssist: state.voiceAssist,
+        isBrowserSupported: state.isBrowserSupported,
+      };
+    case "TOGGLE_VOICE_ASSIST":
+      return { ...state, voiceAssist: !state.voiceAssist };
+    case "SET_UNSUPPORTED":
+      return { ...state, isBrowserSupported: false };
+    default:
+      return state;
   }
+};
 
-  useEffect(() => {
-    const speechPrompts = speechAnalyzer.generateSpeechPrompts()
-    setPrompts(speechPrompts)
+// --- Custom Hook for Audio & Speech Recognition ---
+const useSpeechRecognition = (dispatch: React.Dispatch<Action>) => {
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recognitionRef = useRef<any>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
-    if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {
-      setSpeechSupported(false)
-      console.log("[v0] Speech recognition not supported in this browser")
-    }
-
-    speak(
-      "Welcome to the speech assessment. You'll be asked to speak about different topics while we analyze your speech patterns.",
-    )
-  }, [voiceEnabled])
-
-  const startRecording = async () => {
+  const start = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          sampleRate: 44100,
-        },
-      })
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
 
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: "audio/webm;codecs=opus",
-      })
-
-      mediaRecorderRef.current = mediaRecorder
-      audioChunksRef.current = []
-      pauseTimesRef.current = []
-      lastSpeechTimeRef.current = Date.now()
-      setTranscript("") // Clear previous transcript
-      setInterimTranscript("") // Clear interim transcript
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data)
-        }
-      }
-
+      mediaRecorder.ondataavailable = (event) => audioChunksRef.current.push(event.data);
       mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" })
-        setAudioBlob(audioBlob)
-        setAudioUrl(URL.createObjectURL(audioBlob))
-        stream.getTracks().forEach((track) => track.stop())
+        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        const audioUrl = URL.createObjectURL(audioBlob);
+        dispatch({ type: "STOP_RECORDING", blob: audioBlob, url: audioUrl });
+        stream.getTracks().forEach((track) => track.stop());
+      };
+      mediaRecorder.start();
+      dispatch({ type: "START_RECORDING" });
+
+      // Speech Recognition
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        dispatch({ type: "SET_UNSUPPORTED" });
+        return;
       }
+      const recognition = new SpeechRecognition();
+      recognitionRef.current = recognition;
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = "en-US";
 
-      if (speechSupported) {
-        try {
-          const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition
-          const recognition = new SpeechRecognition()
-          recognition.continuous = true
-          recognition.interimResults = true
-          recognition.lang = "en-US"
-          recognition.maxAlternatives = 1
-
-          recognition.onstart = () => {
-            console.log("[v0] Speech recognition started successfully")
+      recognition.onresult = (event: any) => {
+        let interim = "";
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcriptPart = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            dispatch({ type: "SET_TRANSCRIPT", payload: transcriptPart + " " });
+          } else {
+            interim += transcriptPart;
           }
-
-          recognition.onresult = (event: any) => {
-            let finalTranscript = ""
-            let interim = ""
-
-            for (let i = event.resultIndex; i < event.results.length; i++) {
-              const transcriptPart = event.results[i][0].transcript
-              if (event.results[i].isFinal) {
-                finalTranscript += transcriptPart + " "
-                lastSpeechTimeRef.current = Date.now()
-              } else {
-                interim += transcriptPart
-              }
-            }
-
-            if (finalTranscript) {
-              setTranscript((prev) => prev + finalTranscript)
-              console.log("[v0] Final transcript added:", finalTranscript)
-            }
-            setInterimTranscript(interim)
-            console.log("[v0] Interim transcript:", interim)
-          }
-
-          recognition.onerror = (event: any) => {
-            console.log("[v0] Speech recognition error:", event.error)
-            if (event.error === "no-speech") {
-              // Restart recognition after no speech
-              setTimeout(() => {
-                if (isRecording && !isPaused && recognitionRef.current) {
-                  try {
-                    recognitionRef.current.start()
-                  } catch (e) {
-                    console.log("[v0] Error restarting after no-speech:", e)
-                  }
-                }
-              }, 1000)
-            } else if (event.error === "aborted") {
-              // Recognition was aborted, restart if still recording
-              setTimeout(() => {
-                if (isRecording && !isPaused && recognitionRef.current) {
-                  try {
-                    recognitionRef.current.start()
-                  } catch (e) {
-                    console.log("[v0] Error restarting after abort:", e)
-                  }
-                }
-              }, 100)
-            }
-          }
-
-          recognition.onend = () => {
-            console.log("[v0] Speech recognition ended")
-            // Restart recognition if still recording and not paused
-            if (isRecording && !isPaused) {
-              setTimeout(() => {
-                try {
-                  if (recognitionRef.current) {
-                    recognitionRef.current.start()
-                    console.log("[v0] Speech recognition restarted")
-                  }
-                } catch (error) {
-                  console.log("[v0] Error restarting recognition:", error)
-                }
-              }, 100)
-            }
-          }
-
-          recognition.onspeechend = () => {
-            const pauseLength = Date.now() - lastSpeechTimeRef.current
-            if (pauseLength > 500) {
-              pauseTimesRef.current.push(pauseLength)
-            }
-          }
-
-          recognitionRef.current = recognition
-          recognition.start()
-          console.log("[v0] Starting speech recognition")
-        } catch (error) {
-          console.log("[v0] Error starting speech recognition:", error)
-          setSpeechSupported(false)
         }
-      }
+        dispatch({ type: "SET_INTERIM_TRANSCRIPT", payload: interim });
+      };
 
-      mediaRecorder.start(1000)
-      setIsRecording(true)
-      setRecordingTime(0)
-
-      recordingIntervalRef.current = setInterval(() => {
-        setRecordingTime((prev) => prev + 1)
-      }, 1000)
-
-      speak("Recording started. Please respond to the prompt.")
-    } catch (error) {
-      console.error("Error starting recording:", error)
-      speak("Unable to access microphone. Please check your permissions.")
-    }
-  }
-
-  const pauseRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      if (isPaused) {
-        mediaRecorderRef.current.resume()
-        if (recognitionRef.current && speechSupported) {
+      recognition.onend = () => {
+        if (mediaRecorderRef.current?.state === "recording") {
           try {
-            recognitionRef.current.start()
-          } catch (error) {
-            console.log("[v0] Error resuming recognition:", error)
+            recognition.start();
+          } catch (e) {
+            console.error("Error restarting recognition:", e);
           }
         }
-        setIsPaused(false)
-        speak("Recording resumed")
-      } else {
-        mediaRecorderRef.current.pause()
-        if (recognitionRef.current) {
-          recognitionRef.current.stop()
-        }
-        setIsPaused(true)
-        speak("Recording paused")
-      }
-    }
-  }
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop()
-      if (recognitionRef.current) {
-        recognitionRef.current.stop()
-      }
-      setIsRecording(false)
-      setIsPaused(false)
-      setInterimTranscript("") // Clear interim transcript
-
-      if (recordingIntervalRef.current) {
-        clearInterval(recordingIntervalRef.current)
-      }
-
-      speak("Recording stopped. Analyzing your speech...")
-      analyzeRecording()
-    }
-  }
-
-  const analyzeRecording = async () => {
-    if (!transcript || recordingTime === 0) return
-
-    setIsAnalyzing(true)
-
-    try {
-      // Analyze the transcript
-      const result = speechAnalyzer.analyzeTranscript(transcript, recordingTime, pauseTimesRef.current)
-
-      // Simulate acoustic analysis if audio blob exists
-      if (audioBlob) {
-        const acousticData = await speechAnalyzer.simulateAcousticAnalysis(audioBlob)
-        // In a real implementation, acoustic data would influence the metrics
-      }
-
-      setAnalysisResult(result)
-
-      // Save assessment result
-      const userId = localStorage.getItem("currentUserId")
-      if (userId) {
-        const totalScore = Object.values(result.metrics).reduce((a, b) => a + b, 0) / 5
-
-        const assessmentResult: AssessmentResult = {
-          id: `speech_${Date.now()}`,
-          userId,
-          type: "speech",
-          score: Math.round(totalScore),
-          maxScore: 100,
-          duration: Date.now() - startTime,
-          details: {
-            transcript: result.transcript,
-            wordCount: result.wordCount,
-            uniqueWords: result.uniqueWords,
-            speakingRate: result.speakingRate,
-            metrics: result.metrics,
-            prompt: prompts[currentPrompt],
-          },
-          completedAt: new Date().toISOString(),
-        }
-
-        storage.saveAssessmentResult(assessmentResult)
-      }
-
-      setTestComplete(true)
-      speak("Speech analysis complete. Your results are ready.")
+      };
+      recognition.start();
     } catch (error) {
-      console.error("Error analyzing speech:", error)
-      speak("There was an error analyzing your speech. Please try again.")
-    } finally {
-      setIsAnalyzing(false)
+      console.error("Microphone access denied:", error);
+      alert("Microphone access is required for this test.");
     }
-  }
+  };
 
-  const nextPrompt = () => {
-    if (currentPrompt < prompts.length - 1) {
-      setCurrentPrompt(currentPrompt + 1)
-      setTranscript("")
-      setAudioBlob(null)
-      setAudioUrl(null)
-      setAnalysisResult(null)
-      speak(prompts[currentPrompt + 1])
+  const stop = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
     }
-  }
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
+  };
 
-  if (testComplete && analysisResult) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-background to-accent/5 py-8 px-4">
-        <div className="container mx-auto max-w-3xl">
-          <Card className="text-center">
-            <CardHeader>
-              <div className="w-16 h-16 bg-success/10 rounded-full flex items-center justify-center mx-auto mb-4">
-                <CheckCircle className="w-8 h-8 text-success" />
-              </div>
-              <CardTitle className="text-2xl">Speech Assessment Complete!</CardTitle>
-              <CardDescription>Your speech patterns have been analyzed</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              {/* Speech Metrics */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                <div className="bg-muted/50 p-4 rounded-lg">
-                  <div className="text-2xl font-bold">{analysisResult.metrics.fluency}</div>
-                  <div className="text-sm text-muted-foreground">Fluency</div>
-                </div>
-                <div className="bg-muted/50 p-4 rounded-lg">
-                  <div className="text-2xl font-bold">{analysisResult.metrics.coherence}</div>
-                  <div className="text-sm text-muted-foreground">Coherence</div>
-                </div>
-                <div className="bg-muted/50 p-4 rounded-lg">
-                  <div className="text-2xl font-bold">{analysisResult.metrics.vocabularyDiversity}</div>
-                  <div className="text-sm text-muted-foreground">Vocabulary</div>
-                </div>
-                <div className="bg-muted/50 p-4 rounded-lg">
-                  <div className="text-2xl font-bold">{analysisResult.metrics.pauseFrequency}</div>
-                  <div className="text-sm text-muted-foreground">Pause Pattern</div>
-                </div>
-                <div className="bg-muted/50 p-4 rounded-lg">
-                  <div className="text-2xl font-bold">{analysisResult.metrics.articulation}</div>
-                  <div className="text-sm text-muted-foreground">Articulation</div>
-                </div>
-                <div className="bg-muted/50 p-4 rounded-lg">
-                  <div className="text-2xl font-bold">{Math.round(analysisResult.speakingRate)}</div>
-                  <div className="text-sm text-muted-foreground">Words/Min</div>
-                </div>
-              </div>
+  const pause = () => {
+    if (mediaRecorderRef.current?.state === "recording") {
+      mediaRecorderRef.current.pause();
+      recognitionRef.current?.stop();
+      dispatch({ type: "PAUSE_RECORDING" });
+    }
+  };
 
-              {/* Overall Score */}
-              <div className="bg-primary/10 p-6 rounded-lg">
-                <h3 className="text-lg font-semibold mb-2">Overall Speech Score</h3>
-                <div className="text-4xl font-bold text-primary mb-2">
-                  {Math.round(Object.values(analysisResult.metrics).reduce((a, b) => a + b, 0) / 5)}
-                </div>
-                <Progress
-                  value={Object.values(analysisResult.metrics).reduce((a, b) => a + b, 0) / 5}
-                  className="h-3"
-                />
-              </div>
+  const resume = () => {
+    if (mediaRecorderRef.current?.state === "paused") {
+      mediaRecorderRef.current.resume();
+      recognitionRef.current?.start();
+      dispatch({ type: "RESUME_RECORDING" });
+    }
+  };
 
-              {/* Speech Statistics */}
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div className="text-left">
-                  <p>
-                    <strong>Words Spoken:</strong> {analysisResult.wordCount}
-                  </p>
-                  <p>
-                    <strong>Unique Words:</strong> {analysisResult.uniqueWords}
-                  </p>
-                  <p>
-                    <strong>Recording Time:</strong> {Math.floor(analysisResult.duration / 60)}m{" "}
-                    {analysisResult.duration % 60}s
-                  </p>
-                </div>
-                <div className="text-left">
-                  <p>
-                    <strong>Pauses:</strong> {analysisResult.pauseCount}
-                  </p>
-                  <p>
-                    <strong>Filler Words:</strong> {analysisResult.fillerWords}
-                  </p>
-                  <p>
-                    <strong>Avg Pause:</strong> {analysisResult.averagePauseLength.toFixed(1)}s
-                  </p>
-                </div>
-              </div>
+  return { start, stop, pause, resume };
+};
 
-              <div className="space-y-4">
-                <Button className="w-full button-large" asChild>
-                  <Link href="/dashboard">Return to Dashboard</Link>
-                </Button>
-                <Button variant="outline" className="w-full button-large bg-transparent" asChild>
-                  <Link href="/results">View Detailed Results</Link>
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+// --- UI Sub-components ---
+const TestHeader = ({
+  status,
+  recordingTime,
+  voiceAssist,
+  onToggleVoice,
+}: {
+  status: State["status"];
+  recordingTime: number;
+  voiceAssist: boolean;
+  onToggleVoice: () => void;
+}) => (
+  <header className="mb-8">
+    <Link
+      href="/dashboard"
+      className="inline-flex items-center text-muted-foreground hover:text-foreground mb-4"
+    >
+      <ArrowLeft className="w-4 h-4 mr-2" />
+      Back to Dashboard
+    </Link>
+    <div className="flex items-start justify-between">
+      <div>
+        <h1 className="text-2xl font-bold flex items-center gap-2">
+          <AudioLines className="w-6 h-6 text-primary" />
+          Speech Assessment
+        </h1>
+        <p className="text-muted-foreground">
+          Analyze your speech patterns and language skills.
+        </p>
       </div>
-    )
+      <Button variant="outline" size="sm" onClick={onToggleVoice}>
+        <Volume2 className="w-4 h-4 mr-2" />
+        {voiceAssist ? "Voice On" : "Voice Off"}
+      </Button>
+    </div>
+    <div className="flex items-center gap-4 mt-4">
+      <Badge>Speech Recording</Badge>
+      {(status === "recording" || status === "paused") && (
+        <div className="flex items-center gap-2 ml-auto">
+          <Clock className="w-4 h-4 text-muted-foreground" />
+          <span className="text-sm font-mono text-muted-foreground">
+            {formatTime(recordingTime)}
+          </span>
+        </div>
+      )}
+    </div>
+  </header>
+);
+
+const RecordingControls = ({
+  status,
+  onStart,
+  onPause,
+  onResume,
+  onStop,
+}: {
+  status: State["status"];
+  onStart: () => void;
+  onPause: () => void;
+  onResume: () => void;
+  onStop: () => void;
+}) => (
+  <div className="flex justify-center gap-4 py-4">
+    {status === "idle" && (
+      <Button onClick={onStart} size="lg">
+        <Mic className="w-5 h-5 mr-2" />
+        Start Recording
+      </Button>
+    )}
+    {status === "recording" && (
+      <>
+        <Button onClick={onPause} variant="outline" size="lg">
+          <Pause className="w-5 h-5 mr-2" />
+          Pause
+        </Button>
+        <Button onClick={onStop} variant="destructive" size="lg">
+          <Square className="w-5 h-5 mr-2" />
+          Stop & Analyze
+        </Button>
+      </>
+    )}
+    {status === "paused" && (
+      <>
+        <Button onClick={onResume} variant="outline" size="lg">
+          <Play className="w-5 h-5 mr-2" />
+          Resume
+        </Button>
+        <Button onClick={onStop} variant="destructive" size="lg">
+          <Square className="w-5 h-5 mr-2" />
+          Stop & Analyze
+        </Button>
+      </>
+    )}
+  </div>
+);
+
+const TranscriptDisplay = ({
+  transcript,
+  interimTranscript,
+  isSupported,
+  onTranscriptChange,
+}: {
+  transcript: string;
+  interimTranscript: string;
+  isSupported: boolean;
+  onTranscriptChange: (value: string) => void;
+}) => (
+  <Card>
+    <CardHeader>
+      <CardTitle>Live Transcript</CardTitle>
+      <CardDescription>
+        {isSupported
+          ? "Your speech is being transcribed in real-time."
+          : "Transcription is not supported. Please type your response."}
+      </CardDescription>
+    </CardHeader>
+    <CardContent>
+      <Textarea
+        value={`${transcript}${interimTranscript}`}
+        onChange={(e) => onTranscriptChange(e.target.value)}
+        placeholder="Your transcribed speech will appear here..."
+        className="min-h-[200px] text-base"
+        readOnly={isSupported}
+      />
+    </CardContent>
+  </Card>
+);
+
+const ResultsDisplay = ({
+  result,
+  onReset,
+}: {
+  result: SpeechAnalysisResult;
+  onReset: () => void;
+}) => {
+  const overallScore = Math.round(
+    Object.values(result.metrics).reduce((a, b) => a + b, 0) / 5
+  );
+
+  return (
+    <div className="container mx-auto max-w-3xl py-8">
+      <Card className="text-center">
+        <CardHeader>
+          <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <CheckCircle className="w-8 h-8 text-green-600" />
+          </div>
+          <CardTitle className="text-2xl">Assessment Complete!</CardTitle>
+          <CardDescription>Your speech patterns have been analyzed.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="bg-primary/10 p-6 rounded-lg">
+            <h3 className="text-lg font-semibold mb-2">Overall Speech Score</h3>
+            <div className="text-4xl font-bold text-primary mb-2">{overallScore}</div>
+            <Progress value={overallScore} className="h-3" />
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-center">
+            {Object.entries(result.metrics).map(([key, value]) => (
+              <div key={key} className="bg-muted/50 p-4 rounded-lg">
+                <div className="text-2xl font-bold">{value}</div>
+                <div className="text-sm text-muted-foreground capitalize">
+                  {key.replace(/([A-Z])/g, " $1").trim()}
+                </div>
+              </div>
+            ))}
+            <div className="bg-muted/50 p-4 rounded-lg">
+              <div className="text-2xl font-bold">{Math.round(result.speakingRate)}</div>
+              <div className="text-sm text-muted-foreground">Words/Min</div>
+            </div>
+          </div>
+          <div className="flex justify-center gap-4">
+            <Button onClick={onReset} variant="outline">
+              Take Another Test
+            </Button>
+            <Button asChild>
+              <Link href="/dashboard">Return to Dashboard</Link>
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
+
+// --- Main Page Component ---
+export default function SpeechAssessmentPage() {
+  const [state, dispatch] = useReducer(reducer, initialState);
+  const router = useRouter();
+  const { start, stop, pause, resume } = useSpeechRecognition(dispatch);
+  const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Text-to-speech utility
+  const speak = (text: string) => {
+    if (state.voiceAssist && "speechSynthesis" in window) {
+      speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+    }
+  };
+
+  // Effect to load prompts on mount
+  useEffect(() => {
+    dispatch({ type: "SET_PROMPTS", payload: speechAnalyzer.generateSpeechPrompts() });
+  }, []);
+
+  // Effect to manage recording timer
+  useEffect(() => {
+    if (state.status === "recording") {
+      recordingIntervalRef.current = setInterval(() => dispatch({ type: "TICK" }), 1000);
+    } else {
+      if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
+    }
+    return () => {
+      if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
+    };
+  }, [state.status]);
+
+  // Effect to handle analysis and save results
+  useEffect(() => {
+    if (state.status === "analyzing" && state.audioBlob) {
+      const analyze = async () => {
+        const result = speechAnalyzer.analyzeTranscript(
+          state.transcript,
+          state.recordingTime
+        );
+        dispatch({ type: "ANALYSIS_COMPLETE", result });
+
+        const userId = localStorage.getItem("currentUserId");
+        if (userId) {
+          const score = Math.round(
+            Object.values(result.metrics).reduce((a, b) => a + b, 0) / 5
+          );
+          const assessment: AssessmentResult = {
+            id: `speech_${Date.now()}`,
+            userId,
+            type: "speech",
+            score,
+            maxScore: 100,
+            duration: Date.now() - state.startTime,
+            details: { ...result, prompt: state.prompts[state.currentPromptIndex] },
+            completedAt: new Date().toISOString(),
+          };
+          storage.saveAssessmentResult(assessment);
+        }
+      };
+      analyze();
+    }
+  }, [
+    state.status,
+    state.audioBlob,
+    state.transcript,
+    state.recordingTime,
+    state.startTime,
+    state.prompts,
+    state.currentPromptIndex,
+  ]);
+
+  const handleToggleVoice = () => {
+    dispatch({ type: "TOGGLE_VOICE_ASSIST" });
+    speak(state.voiceAssist ? "Voice assistance disabled." : "Voice assistance enabled.");
+  };
+
+  if (state.status === "complete" && state.analysisResult) {
+    return (
+      <ResultsDisplay
+        result={state.analysisResult}
+        onReset={() => dispatch({ type: "RESET_TEST" })}
+      />
+    );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background to-accent/5 py-8 px-4">
-      <div className="container mx-auto max-w-4xl">
-        {/* Header */}
-        <div className="mb-8">
-          <Link href="/dashboard" className="inline-flex items-center text-muted-foreground hover:text-foreground mb-4">
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Dashboard
-          </Link>
+    <div className="container mx-auto max-w-4xl py-8 px-4">
+      <TestHeader
+        status={state.status}
+        recordingTime={state.recordingTime}
+        voiceAssist={state.voiceAssist}
+        onToggleVoice={handleToggleVoice}
+      />
 
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h1 className="text-2xl font-bold flex items-center gap-2">
-                <Waveform className="w-6 h-6 text-primary" />
-                Speech Assessment
-              </h1>
-              <p className="text-muted-foreground">Analyze your speech patterns and language skills</p>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setVoiceEnabled(!voiceEnabled)
-                speak(voiceEnabled ? "Voice assistance disabled" : "Voice assistance enabled")
-              }}
-            >
-              <Volume2 className="w-4 h-4 mr-2" />
-              {voiceEnabled ? "Voice On" : "Voice Off"}
-            </Button>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <Badge variant="default">Speech Recording</Badge>
-            <div className="flex items-center gap-2 ml-auto">
-              <Clock className="w-4 h-4 text-muted-foreground" />
-              <span className="text-sm text-muted-foreground">
-                {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, "0")}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* Main Content */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Recording Controls */}
-          <div className="lg:col-span-2">
-            <Card>
-              <CardHeader>
-                <CardTitle>Speech Recording</CardTitle>
-                <CardDescription>
-                  Prompt {currentPrompt + 1} of {prompts.length}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                {/* Current Prompt */}
-                <div className="bg-accent/10 p-6 rounded-lg">
-                  <h3 className="font-semibold mb-3">Please respond to this prompt:</h3>
-                  <p className="text-lg leading-relaxed">{prompts[currentPrompt]}</p>
+      <main className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-2">
+          <Card>
+            <CardHeader>
+              <CardTitle>
+                Prompt {state.currentPromptIndex + 1} of {state.prompts.length}
+              </CardTitle>
+              <CardDescription className="text-lg pt-2">
+                {state.prompts[state.currentPromptIndex] || "Loading prompt..."}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <RecordingControls
+                status={state.status}
+                onStart={start}
+                onPause={pause}
+                onResume={resume}
+                onStop={stop}
+              />
+              {state.status === "analyzing" && (
+                <div className="text-center text-muted-foreground">Analyzing...</div>
+              )}
+              {state.audioUrl && state.status !== "recording" && (
+                <div className="mt-4 bg-muted/50 p-4 rounded-lg">
+                  <div className="flex items-center gap-3 mb-2">
+                    <FileAudio className="w-5 h-5 text-primary" />
+                    <span className="font-medium">Your Recording</span>
+                  </div>
+                  <audio controls src={state.audioUrl} className="w-full" />
                 </div>
-
-                {/* Recording Controls */}
-                <div className="flex justify-center gap-4">
-                  {!isRecording ? (
-                    <Button onClick={startRecording} className="button-large" disabled={isAnalyzing}>
-                      <Mic className="w-5 h-5 mr-2" />
-                      Start Recording
-                    </Button>
-                  ) : (
-                    <>
-                      <Button onClick={pauseRecording} variant="outline" className="button-large bg-transparent">
-                        {isPaused ? <Play className="w-5 h-5 mr-2" /> : <Pause className="w-5 h-5 mr-2" />}
-                        {isPaused ? "Resume" : "Pause"}
-                      </Button>
-                      <Button onClick={stopRecording} variant="destructive" className="button-large">
-                        <Square className="w-5 h-5 mr-2" />
-                        Stop & Analyze
-                      </Button>
-                    </>
-                  )}
-                </div>
-
-                {/* Recording Status */}
-                {isRecording && (
-                  <div className="text-center">
-                    <div className="flex items-center justify-center gap-2 mb-2">
-                      <div className="w-3 h-3 bg-destructive rounded-full animate-pulse" />
-                      <span className="text-sm font-medium">{isPaused ? "Recording Paused" : "Recording..."}</span>
-                    </div>
-                    <div className="text-2xl font-mono">
-                      {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, "0")}
-                    </div>
-                  </div>
-                )}
-
-                {/* Analysis Status */}
-                {isAnalyzing && (
-                  <div className="text-center py-8">
-                    <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-                    <p className="text-muted-foreground">Analyzing your speech patterns...</p>
-                  </div>
-                )}
-
-                {/* Audio Playback */}
-                {audioUrl && !isAnalyzing && (
-                  <div className="bg-muted/50 p-4 rounded-lg">
-                    <div className="flex items-center gap-3 mb-3">
-                      <FileAudio className="w-5 h-5 text-primary" />
-                      <span className="font-medium">Your Recording</span>
-                    </div>
-                    <audio controls className="w-full">
-                      <source src={audioUrl} type="audio/webm" />
-                      Your browser does not support audio playback.
-                    </audio>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Live Transcript */}
-          <div>
-            <Card className="animate-in slide-in-from-right-4 duration-500">
-              <CardHeader>
-                <CardTitle>Live Transcript</CardTitle>
-                <CardDescription>
-                  {speechSupported
-                    ? "Your speech is being transcribed in real-time"
-                    : "Speech recognition not supported - you can edit manually"}
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <Textarea
-                  value={transcript + (interimTranscript ? ` ${interimTranscript}` : "")}
-                  onChange={(e) => setTranscript(e.target.value)}
-                  placeholder={
-                    speechSupported
-                      ? "Your speech will appear here as you talk..."
-                      : "You can type your response here or use the audio recording..."
-                  }
-                  className="min-h-40 text-sm transition-all duration-200"
-                  readOnly={isRecording && speechSupported}
-                />
-
-                {(transcript || interimTranscript) && (
-                  <div className="mt-4 text-xs text-muted-foreground space-y-1 animate-in fade-in duration-300">
-                    <p>Words: {(transcript + interimTranscript).split(/\s+/).filter((w) => w.length > 0).length}</p>
-                    <p>Characters: {(transcript + interimTranscript).length}</p>
-                    {!speechSupported && (
-                      <p className="text-warning">⚠️ Manual transcription mode - speech recognition unavailable</p>
-                    )}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Instructions */}
-            <Card className="mt-6">
-              <CardHeader>
-                <CardTitle className="text-lg">Instructions</CardTitle>
-              </CardHeader>
-              <CardContent className="text-sm space-y-2">
-                <p>• Speak clearly and naturally</p>
-                <p>• Take your time to think</p>
-                <p>• Include as much detail as possible</p>
-                <p>• Don't worry about perfect grammar</p>
-                <p>• Aim for 1-2 minutes of speaking</p>
-              </CardContent>
-            </Card>
-          </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
-      </div>
+        <div>
+          <TranscriptDisplay
+            transcript={state.transcript}
+            interimTranscript={state.interimTranscript}
+            isSupported={state.isBrowserSupported}
+            onTranscriptChange={(value) =>
+              dispatch({ type: "SET_TRANSCRIPT", payload: value })
+            }
+          />
+        </div>
+      </main>
     </div>
-  )
+  );
 }
