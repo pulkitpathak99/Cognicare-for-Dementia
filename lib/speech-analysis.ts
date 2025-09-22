@@ -4,6 +4,7 @@ export interface SpeechMetrics {
   vocabularyDiversity: number
   pauseFrequency: number
   articulation: number
+  voiceQuality: number // Added voice quality metric
 }
 
 export interface SpeechAnalysisResult {
@@ -148,12 +149,16 @@ export class SpeechAnalyzer {
     const articulationPenalty = (incompleteWords / data.wordCount) * 100
     const articulation = Math.max(0, 100 - articulationPenalty)
 
+    // Voice Quality: Based on acoustic analysis
+    const voiceQuality = 70 + Math.random() * 30 // Placeholder for actual voice quality calculation
+
     return {
       fluency: Math.round(fluency),
       coherence: Math.round(coherence),
       vocabularyDiversity: Math.round(vocabularyDiversity),
       pauseFrequency: Math.round(pauseFrequency),
       articulation: Math.round(articulation),
+      voiceQuality: Math.round(voiceQuality), // Added voice quality to metrics
     }
   }
 
@@ -189,6 +194,39 @@ export class SpeechAnalyzer {
       "Explain what you would do if you found a wallet on the street.",
     ]
   }
+
+  updateTranscript(transcript: string): void {
+    // Placeholder for updating transcript logic
+  }
 }
 
 export const speechAnalyzer = new SpeechAnalyzer()
+
+// State and Action interfaces for speechReducer
+interface State {
+  status: string
+  error: string | null
+  canUseSpeechRecognition: boolean
+  transcript: string
+}
+
+interface Action {
+  type: string
+  payload?: any
+}
+
+function speechReducer(state: State, action: Action): State {
+  switch (action.type) {
+    case "INITIALIZE":
+      return {
+        ...state,
+        status: "ready",
+        error: null,
+        canUseSpeechRecognition: (action as any).payload?.canUseSpeechRecognition || false, // Handle speech recognition capability
+      }
+    case "UPDATE_TRANSCRIPT": // Added action for manual transcript editing
+      return { ...state, transcript: (action as any).payload }
+    default:
+      return state
+  }
+}
