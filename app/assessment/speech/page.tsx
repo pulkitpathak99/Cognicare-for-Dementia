@@ -39,9 +39,11 @@ export default function SpeechAssessmentPage() {
   const [currentPrompt, setCurrentPrompt] = useState(0)
   const [prompts, setPrompts] = useState<string[]>([])
   const [transcript, setTranscript] = useState("")
+  const [interimTranscript, setInterimTranscript] = useState("") // Added interim transcript state
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [analysisResult, setAnalysisResult] = useState<SpeechAnalysisResult | null>(null)
   const [testComplete, setTestComplete] = useState(false)
+  const [speechSupported, setSpeechSupported] = useState(true) // Added speech support detection
 
   // Recording refs
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -62,6 +64,12 @@ export default function SpeechAssessmentPage() {
   useEffect(() => {
     const speechPrompts = speechAnalyzer.generateSpeechPrompts()
     setPrompts(speechPrompts)
+
+    if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {
+      setSpeechSupported(false)
+      console.log("[v0] Speech recognition not supported in this browser")
+    }
+
     speak(
       "Welcome to the speech assessment. You'll be asked to speak about different topics while we analyze your speech patterns.",
     )
@@ -85,6 +93,8 @@ export default function SpeechAssessmentPage() {
       audioChunksRef.current = []
       pauseTimesRef.current = []
       lastSpeechTimeRef.current = Date.now()
+      setTranscript("") // Clear previous transcript
+      setInterimTranscript("") // Clear interim transcript
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -99,47 +109,105 @@ export default function SpeechAssessmentPage() {
         stream.getTracks().forEach((track) => track.stop())
       }
 
-      // Start speech recognition for real-time transcription
-      if ("webkitSpeechRecognition" in window) {
-        const recognition = new (window as any).webkitSpeechRecognition()
-        recognition.continuous = true
-        recognition.interimResults = true
-        recognition.lang = "en-US"
+      if (speechSupported) {
+        try {
+          const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition
+          const recognition = new SpeechRecognition()
+          recognition.continuous = true
+          recognition.interimResults = true
+          recognition.lang = "en-US"
+          recognition.maxAlternatives = 1
 
-        recognition.onresult = (event: any) => {
-          let finalTranscript = ""
-          let interimTranscript = ""
+          recognition.onstart = () => {
+            console.log("[v0] Speech recognition started successfully")
+          }
 
-          for (let i = event.resultIndex; i < event.results.length; i++) {
-            const transcript = event.results[i][0].transcript
-            if (event.results[i].isFinal) {
-              finalTranscript += transcript + " "
-              lastSpeechTimeRef.current = Date.now()
-            } else {
-              interimTranscript += transcript
+          recognition.onresult = (event: any) => {
+            let finalTranscript = ""
+            let interim = ""
+
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+              const transcriptPart = event.results[i][0].transcript
+              if (event.results[i].isFinal) {
+                finalTranscript += transcriptPart + " "
+                lastSpeechTimeRef.current = Date.now()
+              } else {
+                interim += transcriptPart
+              }
+            }
+
+            if (finalTranscript) {
+              setTranscript((prev) => prev + finalTranscript)
+              console.log("[v0] Final transcript added:", finalTranscript)
+            }
+            setInterimTranscript(interim)
+            console.log("[v0] Interim transcript:", interim)
+          }
+
+          recognition.onerror = (event: any) => {
+            console.log("[v0] Speech recognition error:", event.error)
+            if (event.error === "no-speech") {
+              // Restart recognition after no speech
+              setTimeout(() => {
+                if (isRecording && !isPaused && recognitionRef.current) {
+                  try {
+                    recognitionRef.current.start()
+                  } catch (e) {
+                    console.log("[v0] Error restarting after no-speech:", e)
+                  }
+                }
+              }, 1000)
+            } else if (event.error === "aborted") {
+              // Recognition was aborted, restart if still recording
+              setTimeout(() => {
+                if (isRecording && !isPaused && recognitionRef.current) {
+                  try {
+                    recognitionRef.current.start()
+                  } catch (e) {
+                    console.log("[v0] Error restarting after abort:", e)
+                  }
+                }
+              }, 100)
             }
           }
 
-          setTranscript((prev) => prev + finalTranscript)
-        }
-
-        recognition.onspeechend = () => {
-          const pauseLength = Date.now() - lastSpeechTimeRef.current
-          if (pauseLength > 500) {
-            // Pause longer than 500ms
-            pauseTimesRef.current.push(pauseLength)
+          recognition.onend = () => {
+            console.log("[v0] Speech recognition ended")
+            // Restart recognition if still recording and not paused
+            if (isRecording && !isPaused) {
+              setTimeout(() => {
+                try {
+                  if (recognitionRef.current) {
+                    recognitionRef.current.start()
+                    console.log("[v0] Speech recognition restarted")
+                  }
+                } catch (error) {
+                  console.log("[v0] Error restarting recognition:", error)
+                }
+              }, 100)
+            }
           }
-        }
 
-        recognitionRef.current = recognition
-        recognition.start()
+          recognition.onspeechend = () => {
+            const pauseLength = Date.now() - lastSpeechTimeRef.current
+            if (pauseLength > 500) {
+              pauseTimesRef.current.push(pauseLength)
+            }
+          }
+
+          recognitionRef.current = recognition
+          recognition.start()
+          console.log("[v0] Starting speech recognition")
+        } catch (error) {
+          console.log("[v0] Error starting speech recognition:", error)
+          setSpeechSupported(false)
+        }
       }
 
-      mediaRecorder.start(1000) // Collect data every second
+      mediaRecorder.start(1000)
       setIsRecording(true)
       setRecordingTime(0)
 
-      // Start timer
       recordingIntervalRef.current = setInterval(() => {
         setRecordingTime((prev) => prev + 1)
       }, 1000)
@@ -155,12 +223,20 @@ export default function SpeechAssessmentPage() {
     if (mediaRecorderRef.current && isRecording) {
       if (isPaused) {
         mediaRecorderRef.current.resume()
-        recognitionRef.current?.start()
+        if (recognitionRef.current && speechSupported) {
+          try {
+            recognitionRef.current.start()
+          } catch (error) {
+            console.log("[v0] Error resuming recognition:", error)
+          }
+        }
         setIsPaused(false)
         speak("Recording resumed")
       } else {
         mediaRecorderRef.current.pause()
-        recognitionRef.current?.stop()
+        if (recognitionRef.current) {
+          recognitionRef.current.stop()
+        }
         setIsPaused(true)
         speak("Recording paused")
       }
@@ -170,9 +246,12 @@ export default function SpeechAssessmentPage() {
   const stopRecording = () => {
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop()
-      recognitionRef.current?.stop()
+      if (recognitionRef.current) {
+        recognitionRef.current.stop()
+      }
       setIsRecording(false)
       setIsPaused(false)
+      setInterimTranscript("") // Clear interim transcript
 
       if (recordingIntervalRef.current) {
         clearInterval(recordingIntervalRef.current)
@@ -463,24 +542,35 @@ export default function SpeechAssessmentPage() {
 
           {/* Live Transcript */}
           <div>
-            <Card>
+            <Card className="animate-in slide-in-from-right-4 duration-500">
               <CardHeader>
                 <CardTitle>Live Transcript</CardTitle>
-                <CardDescription>Your speech is being transcribed in real-time</CardDescription>
+                <CardDescription>
+                  {speechSupported
+                    ? "Your speech is being transcribed in real-time"
+                    : "Speech recognition not supported - you can edit manually"}
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 <Textarea
-                  value={transcript}
+                  value={transcript + (interimTranscript ? ` ${interimTranscript}` : "")}
                   onChange={(e) => setTranscript(e.target.value)}
-                  placeholder="Your speech will appear here as you talk..."
-                  className="min-h-40 text-sm"
-                  readOnly={isRecording}
+                  placeholder={
+                    speechSupported
+                      ? "Your speech will appear here as you talk..."
+                      : "You can type your response here or use the audio recording..."
+                  }
+                  className="min-h-40 text-sm transition-all duration-200"
+                  readOnly={isRecording && speechSupported}
                 />
 
-                {transcript && (
-                  <div className="mt-4 text-xs text-muted-foreground">
-                    <p>Words: {transcript.split(/\s+/).filter((w) => w.length > 0).length}</p>
-                    <p>Characters: {transcript.length}</p>
+                {(transcript || interimTranscript) && (
+                  <div className="mt-4 text-xs text-muted-foreground space-y-1 animate-in fade-in duration-300">
+                    <p>Words: {(transcript + interimTranscript).split(/\s+/).filter((w) => w.length > 0).length}</p>
+                    <p>Characters: {(transcript + interimTranscript).length}</p>
+                    {!speechSupported && (
+                      <p className="text-warning">⚠️ Manual transcription mode - speech recognition unavailable</p>
+                    )}
                   </div>
                 )}
               </CardContent>

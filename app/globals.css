@@ -142,10 +142,39 @@
   }
 
   .button-large {
-    @apply min-h-12 px-6 text-lg;
+    @apply min-h-12 px-6 text-lg transition-all duration-200 hover:scale-105; /* Added hover animation */
   }
 
   .touch-target {
     @apply min-h-11 min-w-11;
+  }
+
+  /* Added smooth animations for better UX */
+  .animate-pulse-slow {
+    animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  .animate-bounce-gentle {
+    animation: bounce-gentle 2s infinite;
+  }
+
+  @keyframes bounce-gentle {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-5px);
+    }
+  }
+
+  /* Enhanced card hover effects */
+  .card-hover {
+    @apply transition-all duration-300 hover:shadow-lg hover:scale-[1.02];
+  }
+
+  /* Smooth transitions for interactive elements */
+  .interactive {
+    @apply transition-all duration-200 hover:bg-accent/50 active:scale-95;
   }
 }

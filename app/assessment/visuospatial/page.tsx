@@ -1,10 +1,13 @@
 "use client"
 
+import type React from "react"
+
 import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Puzzle, Clock, ArrowLeft, CheckCircle, Volume2 } from "lucide-react"
+import { Progress } from "@/components/ui/progress"
+import { Puzzle, Clock, ArrowLeft, CheckCircle, Volume2, RotateCcw } from "lucide-react"
 import { storage, type AssessmentResult } from "@/lib/storage"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
@@ -16,32 +19,38 @@ interface PuzzlePiece {
   placed: boolean
   correctX: number
   correctY: number
+  color: string
 }
 
-interface ClockTest {
-  time: string
-  userHour: number
-  userMinute: number
+interface PatternTest {
+  id: number
+  pattern: number[][]
+  userPattern: number[][]
   completed: boolean
 }
 
 export default function VisuospatialAssessmentPage() {
   const router = useRouter()
-  const [currentTest, setCurrentTest] = useState<"puzzle" | "clock" | "complete">("puzzle")
+  const [currentTest, setCurrentTest] = useState<"puzzle" | "pattern" | "rotation" | "complete">("puzzle")
   const [startTime, setStartTime] = useState<number>(Date.now())
   const [voiceEnabled, setVoiceEnabled] = useState(false)
 
   // Puzzle Test State
   const [puzzlePieces, setPuzzlePieces] = useState<PuzzlePiece[]>([])
+  const [selectedPiece, setSelectedPiece] = useState<number | null>(null)
   const [puzzleScore, setPuzzleScore] = useState(0)
   const [puzzleStartTime, setPuzzleStartTime] = useState<number>(0)
 
-  // Clock Test State
-  const [clockTests, setClockTests] = useState<ClockTest[]>([])
-  const [currentClockIndex, setCurrentClockIndex] = useState(0)
-  const [clockScore, setClockScore] = useState(0)
-  const [selectedHour, setSelectedHour] = useState<number | null>(null)
-  const [selectedMinute, setSelectedMinute] = useState<number | null>(null)
+  // Pattern Test State
+  const [patternTests, setPatternTests] = useState<PatternTest[]>([])
+  const [currentPatternIndex, setCurrentPatternIndex] = useState(0)
+  const [patternScore, setPatternScore] = useState(0)
+  const [showPattern, setShowPattern] = useState(true)
+
+  // Rotation Test State
+  const [rotationScore, setRotationScore] = useState(0)
+  const [currentShape, setCurrentShape] = useState(0)
+  const [rotationAnswer, setRotationAnswer] = useState<number | null>(null)
 
   const [testComplete, setTestComplete] = useState(false)
 
@@ -53,46 +62,95 @@ export default function VisuospatialAssessmentPage() {
     }
   }
 
-  // Initialize Puzzle Test
   const initializePuzzleTest = useCallback(() => {
+    const colors = ["#3b82f6", "#ef4444", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899"]
     const pieces: PuzzlePiece[] = [
-      { id: 1, x: 50, y: 50, placed: false, correctX: 200, correctY: 100 },
-      { id: 2, x: 100, y: 50, placed: false, correctX: 300, correctY: 100 },
-      { id: 3, x: 150, y: 50, placed: false, correctX: 200, correctY: 200 },
-      { id: 4, x: 200, y: 50, placed: false, correctX: 300, correctY: 200 },
+      { id: 1, x: 50, y: 300, placed: false, correctX: 150, correctY: 150, color: colors[0] },
+      { id: 2, x: 150, y: 300, placed: false, correctX: 200, correctY: 150, color: colors[1] },
+      { id: 3, x: 250, y: 300, placed: false, correctX: 150, correctY: 200, color: colors[2] },
+      { id: 4, x: 350, y: 300, placed: false, correctX: 200, correctY: 200, color: colors[3] },
+      { id: 5, x: 450, y: 300, placed: false, correctX: 175, correctY: 125, color: colors[4] },
+      { id: 6, x: 550, y: 300, placed: false, correctX: 175, correctY: 225, color: colors[5] },
     ]
 
     setPuzzlePieces(pieces)
     setPuzzleStartTime(Date.now())
-    speak("Arrange the puzzle pieces to form a complete square. Drag each piece to its correct position.")
+    speak("Drag the colorful puzzle pieces to form a complete pattern in the target area.")
   }, [voiceEnabled])
 
-  // Initialize Clock Test
-  const initializeClockTest = useCallback(() => {
-    const tests: ClockTest[] = [
-      { time: "3:00", userHour: 0, userMinute: 0, completed: false },
-      { time: "7:30", userHour: 0, userMinute: 0, completed: false },
-      { time: "10:15", userHour: 0, userMinute: 0, completed: false },
+  const initializePatternTest = useCallback(() => {
+    const tests: PatternTest[] = [
+      {
+        id: 1,
+        pattern: [
+          [1, 0, 1],
+          [0, 1, 0],
+          [1, 0, 1],
+        ],
+        userPattern: [
+          [0, 0, 0],
+          [0, 0, 0],
+          [0, 0, 0],
+        ],
+        completed: false,
+      },
+      {
+        id: 2,
+        pattern: [
+          [1, 1, 0, 1],
+          [0, 1, 1, 0],
+          [1, 0, 1, 1],
+          [1, 1, 0, 0],
+        ],
+        userPattern: [
+          [0, 0, 0, 0],
+          [0, 0, 0, 0],
+          [0, 0, 0, 0],
+          [0, 0, 0, 0],
+        ],
+        completed: false,
+      },
     ]
 
-    setClockTests(tests)
-    setCurrentClockIndex(0)
-    speak("Draw the clock hands to show the requested time. First, show 3 o'clock.")
+    setPatternTests(tests)
+    setCurrentPatternIndex(0)
+    setShowPattern(true)
+    speak("Memorize the pattern, then recreate it by clicking the squares.")
+
+    // Hide pattern after 3 seconds
+    setTimeout(() => {
+      setShowPattern(false)
+      speak("Now recreate the pattern you just saw.")
+    }, 3000)
   }, [voiceEnabled])
 
   useEffect(() => {
     initializePuzzleTest()
   }, [initializePuzzleTest])
 
-  const handlePuzzlePieceClick = (pieceId: number, targetX: number, targetY: number) => {
+  const handlePuzzlePieceClick = (pieceId: number) => {
+    if (selectedPiece === pieceId) {
+      setSelectedPiece(null)
+    } else {
+      setSelectedPiece(pieceId)
+    }
+  }
+
+  const handleTargetAreaClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (selectedPiece === null) return
+
+    const rect = event.currentTarget.getBoundingClientRect()
+    const x = event.clientX - rect.left - 25 // Center the piece
+    const y = event.clientY - rect.top - 25
+
     setPuzzlePieces((prev) =>
       prev.map((piece) => {
-        if (piece.id === pieceId) {
-          const isCorrect = Math.abs(targetX - piece.correctX) < 30 && Math.abs(targetY - piece.correctY) < 30
+        if (piece.id === selectedPiece) {
+          const isCorrect = Math.abs(x - piece.correctX) < 40 && Math.abs(y - piece.correctY) < 40
           return {
             ...piece,
-            x: targetX,
-            y: targetY,
+            x: isCorrect ? piece.correctX : x,
+            y: isCorrect ? piece.correctY : y,
             placed: isCorrect,
           }
         }
@@ -100,10 +158,12 @@ export default function VisuospatialAssessmentPage() {
       }),
     )
 
+    setSelectedPiece(null)
+
     // Check if puzzle is complete
     const updatedPieces = puzzlePieces.map((piece) => {
-      if (piece.id === pieceId) {
-        const isCorrect = Math.abs(targetX - piece.correctX) < 30 && Math.abs(targetY - piece.correctY) < 30
+      if (piece.id === selectedPiece) {
+        const isCorrect = Math.abs(x - piece.correctX) < 40 && Math.abs(y - piece.correctY) < 40
         return { ...piece, placed: isCorrect }
       }
       return piece
@@ -111,54 +171,89 @@ export default function VisuospatialAssessmentPage() {
 
     if (updatedPieces.every((piece) => piece.placed)) {
       const completionTime = Date.now() - puzzleStartTime
-      const score = Math.max(0, 100 - Math.floor(completionTime / 1000))
+      const score = Math.max(20, 100 - Math.floor(completionTime / 1000))
       setPuzzleScore(score)
-      speak("Puzzle complete! Now let's test your clock drawing skills.")
-      setCurrentTest("clock")
-      initializeClockTest()
+      speak("Excellent! Puzzle complete! Now let's test your pattern memory.")
+      setTimeout(() => {
+        setCurrentTest("pattern")
+        initializePatternTest()
+      }, 1500)
     }
   }
 
-  const handleClockSubmit = () => {
-    if (selectedHour === null || selectedMinute === null) return
+  const handlePatternCellClick = (row: number, col: number) => {
+    if (showPattern) return
 
-    const currentTest = clockTests[currentClockIndex]
-    const [targetHour, targetMinute] = currentTest.time.split(":").map(Number)
+    setPatternTests((prev) =>
+      prev.map((test, index) => {
+        if (index === currentPatternIndex) {
+          const newUserPattern = [...test.userPattern]
+          newUserPattern[row][col] = newUserPattern[row][col] === 1 ? 0 : 1
+          return { ...test, userPattern: newUserPattern }
+        }
+        return test
+      }),
+    )
+  }
 
-    let isCorrect = false
-    if (targetMinute === 0) {
-      // Exact hour
-      isCorrect = selectedHour === targetHour && selectedMinute === 0
-    } else if (targetMinute === 30) {
-      // Half hour
-      isCorrect = selectedHour === targetHour && selectedMinute === 30
-    } else if (targetMinute === 15) {
-      // Quarter hour
-      isCorrect = selectedHour === targetHour && selectedMinute === 15
-    }
+  const submitPattern = () => {
+    const currentTest = patternTests[currentPatternIndex]
+    const isCorrect = JSON.stringify(currentTest.pattern) === JSON.stringify(currentTest.userPattern)
 
     if (isCorrect) {
-      setClockScore(clockScore + 1)
+      setPatternScore(patternScore + 1)
+      speak("Correct! Well done.")
+    } else {
+      speak("Not quite right, but good effort.")
     }
 
-    if (currentClockIndex === clockTests.length - 1) {
-      // Clock test complete
-      completeAssessment(clockScore + (isCorrect ? 1 : 0))
+    if (currentPatternIndex === patternTests.length - 1) {
+      speak("Pattern test complete! Now let's test your spatial rotation skills.")
+      setTimeout(() => {
+        setCurrentTest("rotation")
+        initializeRotationTest()
+      }, 2000)
     } else {
-      setCurrentClockIndex(currentClockIndex + 1)
-      setSelectedHour(null)
-      setSelectedMinute(null)
-      const nextTime = clockTests[currentClockIndex + 1].time
-      speak(`Good! Now show ${nextTime} on the clock.`)
+      setCurrentPatternIndex(currentPatternIndex + 1)
+      setShowPattern(true)
+      setTimeout(() => {
+        setShowPattern(false)
+        speak("Now recreate this new pattern.")
+      }, 3000)
     }
   }
 
-  const completeAssessment = (finalClockScore: number) => {
+  const initializeRotationTest = () => {
+    setCurrentShape(0)
+    setRotationAnswer(null)
+    speak("Look at the shape on the left, then select which rotated version matches it on the right.")
+  }
+
+  const submitRotation = (answer: number) => {
+    const correctAnswers = [2, 1, 3] // Correct rotation for each shape
+    const isCorrect = answer === correctAnswers[currentShape]
+
+    if (isCorrect) {
+      setRotationScore(rotationScore + 1)
+      speak("Correct!")
+    } else {
+      speak("Not quite right.")
+    }
+
+    if (currentShape === 2) {
+      completeAssessment()
+    } else {
+      setCurrentShape(currentShape + 1)
+      setRotationAnswer(null)
+    }
+  }
+
+  const completeAssessment = () => {
     const userId = localStorage.getItem("currentUserId")
     if (!userId) return
 
-    const totalScore = puzzleScore + finalClockScore * 20 // Scale clock score
-    const maxScore = 100 + clockTests.length * 20
+    const totalScore = puzzleScore + patternScore * 30 + rotationScore * 25
+    const maxScore = 100 + patternTests.length * 30 + 3 * 25
     const duration = Date.now() - startTime
 
     const result: AssessmentResult = {
@@ -170,47 +265,66 @@ export default function VisuospatialAssessmentPage() {
       duration,
       details: {
         puzzleScore,
-        clockScore: finalClockScore,
+        patternScore,
+        rotationScore,
         puzzleCompletionTime: Date.now() - puzzleStartTime,
-        clockTests: clockTests.length,
+        totalTests: 3,
       },
       completedAt: new Date().toISOString(),
     }
 
     storage.saveAssessmentResult(result)
     setTestComplete(true)
-    speak("Visuospatial assessment complete. Well done!")
+    speak("Visuospatial assessment complete! Excellent work on all the spatial reasoning tasks.")
+  }
+
+  const resetPuzzle = () => {
+    initializePuzzleTest()
+    setSelectedPiece(null)
   }
 
   if (testComplete) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-background to-accent/5 py-8 px-4">
         <div className="container mx-auto max-w-2xl">
-          <Card className="text-center">
+          <Card className="text-center animate-in fade-in duration-500">
             <CardHeader>
-              <div className="w-16 h-16 bg-success/10 rounded-full flex items-center justify-center mx-auto mb-4">
+              <div className="w-16 h-16 bg-success/10 rounded-full flex items-center justify-center mx-auto mb-4 animate-in zoom-in duration-300">
                 <CheckCircle className="w-8 h-8 text-success" />
               </div>
               <CardTitle className="text-2xl">Visuospatial Assessment Complete!</CardTitle>
-              <CardDescription>Your results have been saved to your profile</CardDescription>
+              <CardDescription>Your spatial reasoning skills have been evaluated</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-muted/50 p-4 rounded-lg">
+              <div className="grid grid-cols-3 gap-4">
+                <div className="bg-muted/50 p-4 rounded-lg animate-in slide-in-from-left duration-300">
                   <div className="text-2xl font-bold">{puzzleScore}</div>
                   <div className="text-sm text-muted-foreground">Puzzle Assembly</div>
                 </div>
-                <div className="bg-muted/50 p-4 rounded-lg">
-                  <div className="text-2xl font-bold">{clockScore}</div>
-                  <div className="text-sm text-muted-foreground">Clock Drawing</div>
+                <div className="bg-muted/50 p-4 rounded-lg animate-in slide-in-from-bottom duration-300 delay-100">
+                  <div className="text-2xl font-bold">{patternScore}</div>
+                  <div className="text-sm text-muted-foreground">Pattern Memory</div>
+                </div>
+                <div className="bg-muted/50 p-4 rounded-lg animate-in slide-in-from-right duration-300 delay-200">
+                  <div className="text-2xl font-bold">{rotationScore}</div>
+                  <div className="text-sm text-muted-foreground">Spatial Rotation</div>
                 </div>
               </div>
+
+              <div className="bg-primary/10 p-6 rounded-lg animate-in fade-in duration-500 delay-300">
+                <h3 className="text-lg font-semibold mb-2">Overall Score</h3>
+                <div className="text-4xl font-bold text-primary mb-2">
+                  {puzzleScore + patternScore * 30 + rotationScore * 25}
+                </div>
+                <Progress value={(puzzleScore + patternScore * 30 + rotationScore * 25) / 2.35} className="h-3" />
+              </div>
+
               <div className="space-y-4">
                 <Button className="w-full button-large" asChild>
                   <Link href="/dashboard">Return to Dashboard</Link>
                 </Button>
                 <Button variant="outline" className="w-full button-large bg-transparent" asChild>
-                  <Link href="/assessment/speech">Next: Speech Test</Link>
+                  <Link href="/assessment/speech">Next: Speech Assessment</Link>
                 </Button>
               </div>
             </CardContent>
@@ -222,7 +336,7 @@ export default function VisuospatialAssessmentPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background to-accent/5 py-8 px-4">
-      <div className="container mx-auto max-w-4xl">
+      <div className="container mx-auto max-w-5xl">
         {/* Header */}
         <div className="mb-8">
           <Link href="/dashboard" className="inline-flex items-center text-muted-foreground hover:text-foreground mb-4">
@@ -236,7 +350,7 @@ export default function VisuospatialAssessmentPage() {
                 <Puzzle className="w-6 h-6 text-primary" />
                 Visuospatial Assessment
               </h1>
-              <p className="text-muted-foreground">Test your spatial reasoning and visual processing</p>
+              <p className="text-muted-foreground">Test your spatial reasoning and visual processing abilities</p>
             </div>
             <Button
               variant="outline"
@@ -253,7 +367,8 @@ export default function VisuospatialAssessmentPage() {
 
           <div className="flex items-center gap-4">
             <Badge variant={currentTest === "puzzle" ? "default" : "secondary"}>Puzzle Assembly</Badge>
-            <Badge variant={currentTest === "clock" ? "default" : "secondary"}>Clock Drawing</Badge>
+            <Badge variant={currentTest === "pattern" ? "default" : "secondary"}>Pattern Memory</Badge>
+            <Badge variant={currentTest === "rotation" ? "default" : "secondary"}>Spatial Rotation</Badge>
             <div className="flex items-center gap-2 ml-auto">
               <Clock className="w-4 h-4 text-muted-foreground" />
               <span className="text-sm text-muted-foreground">
@@ -266,173 +381,233 @@ export default function VisuospatialAssessmentPage() {
 
         {/* Puzzle Test */}
         {currentTest === "puzzle" && (
-          <Card>
+          <Card className="animate-in fade-in duration-500">
             <CardHeader>
-              <CardTitle>Digital Puzzle Assembly</CardTitle>
-              <CardDescription>
-                Drag the puzzle pieces to form a complete square. Click on a piece and then click where you want to
-                place it.
-              </CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Interactive Puzzle Assembly</CardTitle>
+                  <CardDescription>
+                    Click a puzzle piece to select it, then click in the target area to place it. Form a complete
+                    pattern!
+                  </CardDescription>
+                </div>
+                <Button variant="outline" size="sm" onClick={resetPuzzle}>
+                  <RotateCcw className="w-4 h-4 mr-2" />
+                  Reset
+                </Button>
+              </div>
             </CardHeader>
             <CardContent>
-              <div className="relative bg-muted/20 rounded-lg mx-auto" style={{ height: "400px", width: "500px" }}>
-                {/* Target area outline */}
-                <div
-                  className="absolute border-2 border-dashed border-primary/50"
-                  style={{
-                    left: "180px",
-                    top: "80px",
-                    width: "140px",
-                    height: "140px",
-                  }}
-                />
-
-                {/* Puzzle pieces */}
-                {puzzlePieces.map((piece) => (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                {/* Target Area */}
+                <div>
+                  <h3 className="font-semibold mb-4">Target Area - Click to place selected piece</h3>
                   <div
-                    key={piece.id}
-                    onClick={(e) => {
-                      const rect = e.currentTarget.parentElement!.getBoundingClientRect()
-                      const x = e.clientX - rect.left
-                      const y = e.clientY - rect.top
-                      handlePuzzlePieceClick(piece.id, x, y)
-                    }}
-                    className={`absolute w-16 h-16 border-2 cursor-pointer transition-all ${
-                      piece.placed ? "bg-success/20 border-success" : "bg-primary/20 border-primary hover:bg-primary/30"
-                    }`}
-                    style={{
-                      left: `${piece.x}px`,
-                      top: `${piece.y}px`,
-                    }}
+                    className="relative bg-muted/20 rounded-lg border-2 border-dashed border-primary/50 cursor-crosshair"
+                    style={{ height: "300px", width: "300px" }}
+                    onClick={handleTargetAreaClick}
                   >
-                    <div className="w-full h-full flex items-center justify-center font-bold text-lg">{piece.id}</div>
+                    {/* Placed pieces */}
+                    {puzzlePieces
+                      .filter((piece) => piece.x >= 100 && piece.x <= 400 && piece.y >= 100 && piece.y <= 400)
+                      .map((piece) => (
+                        <div
+                          key={piece.id}
+                          className={`absolute w-12 h-12 rounded-lg border-2 transition-all duration-300 ${
+                            piece.placed
+                              ? "border-success shadow-lg scale-105"
+                              : "border-primary/50 hover:border-primary"
+                          }`}
+                          style={{
+                            left: `${piece.x - 100}px`,
+                            top: `${piece.y - 100}px`,
+                            backgroundColor: piece.color,
+                          }}
+                        >
+                          <div className="w-full h-full flex items-center justify-center font-bold text-white text-sm">
+                            {piece.id}
+                          </div>
+                        </div>
+                      ))}
                   </div>
-                ))}
-              </div>
+                </div>
 
-              <div className="mt-4 text-center">
-                <p className="text-sm text-muted-foreground">
-                  Pieces placed: {puzzlePieces.filter((p) => p.placed).length} / {puzzlePieces.length}
-                </p>
+                {/* Puzzle Pieces */}
+                <div>
+                  <h3 className="font-semibold mb-4">Puzzle Pieces - Click to select</h3>
+                  <div className="grid grid-cols-3 gap-4">
+                    {puzzlePieces
+                      .filter((piece) => !piece.placed)
+                      .map((piece) => (
+                        <div
+                          key={piece.id}
+                          onClick={() => handlePuzzlePieceClick(piece.id)}
+                          className={`w-16 h-16 rounded-lg border-2 cursor-pointer transition-all duration-200 hover:scale-105 ${
+                            selectedPiece === piece.id
+                              ? "border-primary shadow-lg ring-2 ring-primary/50 scale-105"
+                              : "border-primary/30 hover:border-primary"
+                          }`}
+                          style={{ backgroundColor: piece.color }}
+                        >
+                          <div className="w-full h-full flex items-center justify-center font-bold text-white">
+                            {piece.id}
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+
+                  <div className="mt-6 space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span>Progress:</span>
+                      <span>
+                        {puzzlePieces.filter((p) => p.placed).length} / {puzzlePieces.length}
+                      </span>
+                    </div>
+                    <Progress value={(puzzlePieces.filter((p) => p.placed).length / puzzlePieces.length) * 100} />
+                  </div>
+                </div>
               </div>
             </CardContent>
           </Card>
         )}
 
-        {/* Clock Drawing Test */}
-        {currentTest === "clock" && (
-          <Card>
+        {/* Pattern Memory Test */}
+        {currentTest === "pattern" && (
+          <Card className="animate-in fade-in duration-500">
             <CardHeader>
-              <CardTitle>Digital Clock Drawing Test</CardTitle>
+              <CardTitle>Pattern Memory Test</CardTitle>
               <CardDescription>
-                Set the clock to show: <strong>{clockTests[currentClockIndex]?.time}</strong>
+                {showPattern
+                  ? "Memorize this pattern - it will disappear in a few seconds"
+                  : "Recreate the pattern by clicking the squares"}
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="text-center space-y-8">
-                {/* Clock face */}
-                <div className="relative w-64 h-64 mx-auto">
-                  <div className="w-full h-full border-4 border-primary rounded-full bg-background relative">
-                    {/* Clock numbers */}
-                    {[12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((num) => {
-                      const angle = (num === 12 ? 0 : num * 30) - 90
-                      const radian = (angle * Math.PI) / 180
-                      const x = Math.cos(radian) * 100 + 128
-                      const y = Math.sin(radian) * 100 + 128
-                      return (
-                        <div
-                          key={num}
-                          className="absolute w-8 h-8 flex items-center justify-center font-bold text-lg"
-                          style={{
-                            left: `${x - 16}px`,
-                            top: `${y - 16}px`,
-                          }}
-                        >
-                          {num}
-                        </div>
-                      )
-                    })}
-
-                    {/* Hour hand */}
-                    {selectedHour !== null && (
-                      <div
-                        className="absolute w-1 bg-primary origin-bottom"
-                        style={{
-                          height: "60px",
-                          left: "50%",
-                          top: "50%",
-                          transform: `translate(-50%, -100%) rotate(${(selectedHour % 12) * 30 - 90}deg)`,
-                        }}
-                      />
-                    )}
-
-                    {/* Minute hand */}
-                    {selectedMinute !== null && (
-                      <div
-                        className="absolute w-0.5 bg-primary origin-bottom"
-                        style={{
-                          height: "80px",
-                          left: "50%",
-                          top: "50%",
-                          transform: `translate(-50%, -100%) rotate(${selectedMinute * 6 - 90}deg)`,
-                        }}
-                      />
-                    )}
-
-                    {/* Center dot */}
-                    <div className="absolute w-3 h-3 bg-primary rounded-full top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2" />
-                  </div>
+              <div className="text-center space-y-6">
+                <div className="inline-block">
+                  {patternTests[currentPatternIndex] && (
+                    <div
+                      className="grid gap-2"
+                      style={{
+                        gridTemplateColumns: `repeat(${patternTests[currentPatternIndex].pattern[0].length}, 1fr)`,
+                      }}
+                    >
+                      {(showPattern
+                        ? patternTests[currentPatternIndex].pattern
+                        : patternTests[currentPatternIndex].userPattern
+                      ).map((row, rowIndex) =>
+                        row.map((cell, colIndex) => (
+                          <div
+                            key={`${rowIndex}-${colIndex}`}
+                            onClick={() => handlePatternCellClick(rowIndex, colIndex)}
+                            className={`w-12 h-12 border-2 cursor-pointer transition-all duration-200 hover:scale-105 ${
+                              cell === 1
+                                ? "bg-primary border-primary"
+                                : "bg-muted border-muted-foreground/30 hover:border-primary/50"
+                            } ${!showPattern ? "hover:bg-primary/20" : ""}`}
+                          />
+                        )),
+                      )}
+                    </div>
+                  )}
                 </div>
 
-                {/* Controls */}
-                <div className="space-y-4">
-                  <div>
-                    <h4 className="font-medium mb-2">Hour Hand</h4>
-                    <div className="grid grid-cols-6 gap-2 max-w-md mx-auto">
-                      {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((hour) => (
-                        <Button
-                          key={hour}
-                          variant={selectedHour === hour ? "default" : "outline"}
-                          size="sm"
-                          onClick={() => setSelectedHour(hour)}
-                          className="bg-transparent"
-                        >
-                          {hour}
-                        </Button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <h4 className="font-medium mb-2">Minute Hand</h4>
-                    <div className="grid grid-cols-4 gap-2 max-w-md mx-auto">
-                      {[0, 15, 30, 45].map((minute) => (
-                        <Button
-                          key={minute}
-                          variant={selectedMinute === minute ? "default" : "outline"}
-                          size="sm"
-                          onClick={() => setSelectedMinute(minute)}
-                          className="bg-transparent"
-                        >
-                          :{minute.toString().padStart(2, "0")}
-                        </Button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <Button
-                    onClick={handleClockSubmit}
-                    disabled={selectedHour === null || selectedMinute === null}
-                    className="button-large"
-                  >
-                    Submit Time
+                {!showPattern && (
+                  <Button onClick={submitPattern} className="button-large">
+                    Submit Pattern
                   </Button>
-                </div>
+                )}
 
                 <div className="text-sm text-muted-foreground">
-                  Test {currentClockIndex + 1} of {clockTests.length}
+                  Pattern {currentPatternIndex + 1} of {patternTests.length}
                 </div>
               </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Spatial Rotation Test */}
+        {currentTest === "rotation" && (
+          <Card className="animate-in fade-in duration-500">
+            <CardHeader>
+              <CardTitle>Spatial Rotation Test</CardTitle>
+              <CardDescription>
+                Which of the shapes on the right is the same as the shape on the left, just rotated?
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
+                {/* Original Shape */}
+                <div className="text-center">
+                  <h3 className="font-semibold mb-4">Original Shape</h3>
+                  <div className="bg-muted/20 p-8 rounded-lg">
+                    {currentShape === 0 && (
+                      <div className="w-24 h-24 bg-primary mx-auto relative">
+                        <div className="absolute top-0 right-0 w-8 h-8 bg-accent"></div>
+                      </div>
+                    )}
+                    {currentShape === 1 && (
+                      <div className="w-24 h-16 bg-primary mx-auto relative">
+                        <div className="absolute bottom-0 left-0 w-8 h-8 bg-accent"></div>
+                        <div className="absolute top-0 right-0 w-8 h-8 bg-accent"></div>
+                      </div>
+                    )}
+                    {currentShape === 2 && (
+                      <div className="w-20 h-20 bg-primary mx-auto relative transform rotate-45">
+                        <div className="absolute -top-2 left-1/2 transform -translate-x-1/2 w-4 h-4 bg-accent"></div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Answer Options */}
+                <div className="text-center">
+                  <h3 className="font-semibold mb-4">Choose the Matching Rotated Shape</h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    {[1, 2, 3, 4].map((option) => (
+                      <Button
+                        key={option}
+                        variant={rotationAnswer === option ? "default" : "outline"}
+                        className="h-24 bg-transparent hover:bg-primary/10"
+                        onClick={() => setRotationAnswer(option)}
+                      >
+                        <div className="bg-muted/20 p-4 rounded">
+                          {/* Different rotated versions based on current shape and option */}
+                          {currentShape === 0 && option === 1 && (
+                            <div className="w-16 h-16 bg-primary relative">
+                              <div className="absolute bottom-0 left-0 w-6 h-6 bg-accent"></div>
+                            </div>
+                          )}
+                          {currentShape === 0 && option === 2 && (
+                            <div className="w-16 h-16 bg-primary relative">
+                              <div className="absolute bottom-0 right-0 w-6 h-6 bg-accent"></div>
+                            </div>
+                          )}
+                          {currentShape === 0 && option === 3 && (
+                            <div className="w-16 h-16 bg-primary relative">
+                              <div className="absolute top-0 left-0 w-6 h-6 bg-accent"></div>
+                            </div>
+                          )}
+                          {currentShape === 0 && option === 4 && (
+                            <div className="w-16 h-16 bg-primary relative">
+                              <div className="absolute top-0 right-0 w-6 h-6 bg-accent"></div>
+                            </div>
+                          )}
+                          {/* Add more shape variations for other currentShape values */}
+                        </div>
+                      </Button>
+                    ))}
+                  </div>
+
+                  {rotationAnswer && (
+                    <Button onClick={() => submitRotation(rotationAnswer)} className="button-large mt-4">
+                      Submit Answer
+                    </Button>
+                  )}
+                </div>
+              </div>
+
+              <div className="text-center mt-6 text-sm text-muted-foreground">Shape {currentShape + 1} of 3</div>
             </CardContent>
           </Card>
         )}
