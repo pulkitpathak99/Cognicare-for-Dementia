@@ -32,14 +32,18 @@ export class BehavioralAnalyzer {
   private socialData: SocialInteraction[] = []
   private circadianData: CircadianData[] = []
   private typingData: TypingDynamics[] = []
+  private isInitialized = false
 
   constructor() {
-    this.initializeTracking()
+    // this.initializeTracking()
   }
 
   private initializeTracking() {
+    if (this.isInitialized || typeof window === "undefined") return
+    this.isInitialized = true
+
     // Initialize device motion tracking if available
-    if (typeof window !== "undefined" && "DeviceMotionEvent" in window) {
+    if ("DeviceMotionEvent" in window) {
       this.startActivityTracking()
     }
 
@@ -51,6 +55,8 @@ export class BehavioralAnalyzer {
   }
 
   private startActivityTracking() {
+    if (typeof window === "undefined") return
+
     let lastActivity = Date.now()
     let activityLevel = 0
 
@@ -84,6 +90,8 @@ export class BehavioralAnalyzer {
   }
 
   private startTypingTracking() {
+    if (typeof document === "undefined") return
+
     let keystrokes: number[] = []
     let errors = 0
     let lastKeyTime = 0
@@ -121,6 +129,8 @@ export class BehavioralAnalyzer {
   }
 
   private startCircadianTracking() {
+    if (typeof document === "undefined" || typeof setInterval === "undefined") return
+
     let screenStartTime = Date.now()
     let dailyScreenTime = 0
 
@@ -171,6 +181,8 @@ export class BehavioralAnalyzer {
     insights: string[]
     riskFactors: string[]
   } {
+    this.initializeTracking()
+
     const activityScore = this.analyzeActivityPatterns()
     const socialScore = this.analyzeSocialPatterns()
     const circadianScore = this.analyzeCircadianPatterns()
@@ -298,16 +310,18 @@ export class BehavioralAnalyzer {
   }
 
   public getDataSummary() {
+    const timestamps = [
+      ...this.activityData.map((d) => d.timestamp),
+      ...this.circadianData.map((d) => d.timestamp),
+      ...this.typingData.map((d) => d.timestamp),
+    ]
+
     return {
       activityDataPoints: this.activityData.length,
       socialDataPoints: this.socialData.length,
       circadianDataPoints: this.circadianData.length,
       typingDataPoints: this.typingData.length,
-      lastUpdated: Math.max(
-        ...this.activityData.map((d) => d.timestamp),
-        ...this.circadianData.map((d) => d.timestamp),
-        ...this.typingData.map((d) => d.timestamp),
-      ),
+      lastUpdated: timestamps.length > 0 ? Math.max(...timestamps) : Date.now(),
     }
   }
 }
