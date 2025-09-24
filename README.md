@@ -55,7 +55,7 @@ CogniCare is built on a modern, scalable microservices architecture to ensure re
 |----------|-------------|
 | Frontend | Next.js, React, TypeScript |
 | Styling | Tailwind CSS, shadcn/ui |
-| AI/ML | TensorFlow, PyTorch, OpenAI API |
+| AI/ML | TensorFlow, PyTorch, Gemini API |
 | Database | PostgreSQL, MongoDB |
 | Deployment | Vercel, Docker |
 
