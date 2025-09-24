@@ -14,13 +14,12 @@ This project is brought to you by a dedicated team of innovators:
 - **Somya Aggarwal**
 - **Pratyusha Chaturvedi**
 - **Sarthak Chalia**
-- **Arpita Arora**
 - **Ishita Srivastava**
-
+- **Arpita Arora**
 
 ## 🎯 The Problem
 
-The onset of dementia is often subtle, with early signs being missed or mistaken for normal ageing. Traditional diagnostic methods can be expensive, time-consuming, and require specialist visits, making them inaccessible to a large portion of the population, especially in remote areas. There is a critical need for a scalable, user-friendly screening tool that can be used at home.
+The onset of dementia is often subtle, with early signs being missed or mistaken for normal aging. Traditional diagnostic methods can be expensive, time-consuming, and require specialist visits, making them inaccessible to a large portion of the population, especially in remote areas. There is a critical need for a scalable, user-friendly screening tool that can be used at home.
 
 ## ✨ Our Solution: CogniCare
 
@@ -54,11 +53,11 @@ CogniCare is built on a modern, scalable microservices architecture to ensure re
 
 | Category | Technologies |
 |----------|-------------|
-| Frontend | React Native / Flutter, React.js |
-| Backend | Node.js, Python, Go |
-| AI/ML | TensorFlow / PyTorch, Scikit-learn, NLP Libraries |
+| Frontend | Next.js, React, TypeScript |
+| Styling | Tailwind CSS, shadcn/ui |
+| AI/ML | TensorFlow, PyTorch, OpenAI API |
 | Database | PostgreSQL, MongoDB |
-| DevOps | Docker, Kubernetes, Jenkins, AWS / Google Cloud |
+| Deployment | Vercel, Docker |
 
 ## 🚀 Getting Started
 
@@ -86,6 +85,15 @@ To get a local copy up and running, follow these simple steps.
    npm run dev
    ```
 
+## 🤝 Contributing
+
+Contributions are what make the open-source community such an amazing place to learn, inspire, and create. Any contributions you make are greatly appreciated.
+
+1. Fork the Project
+2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the Branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
 
 ## 📄 License
 
