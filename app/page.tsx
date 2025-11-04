@@ -7,6 +7,7 @@ import { Brain, Users, Shield, Activity, ArrowRight, Heart, Clock, Award, BarCha
 import Link from "next/link"
 import { Navigation } from "@/components/navigation"
 
+
 export default function HomePage() {
   const [mounted, setMounted] = useState(false)
 
