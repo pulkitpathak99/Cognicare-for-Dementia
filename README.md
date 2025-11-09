@@ -11,11 +11,8 @@ Dementia affects millions, yet early detection remains a significant challenge d
 This project is brought to you by a dedicated team of innovators:
 
 - **Pulkit Pathak**
-- **Somya Aggarwal**
-- **Pratyusha Chaturvedi**
-- **Sarthak Chalia**
-- **Ishita Srivastava**
-- **Arpita Arora**
+- **Sparsh Agarwal**
+- **Ghanand Bansal**
 
 ## 🎯 The Problem
 
@@ -101,7 +98,7 @@ This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md
 
 ## 🙏 Acknowledgments
 
-- Smart India Hackathon for providing the platform to develop this solution
+- TechJam2.0 for providing the platform to develop this solution
 - All contributors and supporters of this project
 - The open-source community for the amazing tools and libraries
 
